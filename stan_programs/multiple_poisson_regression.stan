@@ -1,5 +1,5 @@
 // poisson multiple regression
-// need to add the missing lines of code
+// need to add the missing lines of code (see comments below)
 data {
   int<lower=1> N;
   array[N] int<lower=0> complaints;
