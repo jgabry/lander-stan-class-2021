@@ -1499,8 +1499,21 @@ loss_df <-
     building = rep(buildings, each = max(traps) + 1)
   )
 
+dec_df <- loss_df %>%
+  group_by(building) %>%
+  summarise(
+    arg_max = which.max(loss) - 1,
+    max = max(loss)
+  )
+
 ggplot(data = loss_df, aes(x = traps, y = loss)) +
   geom_ribbon(aes(ymin = lower, ymax = upper), fill = "skyblue") +
+  geom_vline(data = dec_df,
+             mapping = aes(xintercept = arg_max),
+             col = "red") +
+  geom_hline(data = dec_df,
+             mapping = aes(yintercept = max),
+             col = "red") +
   geom_line() +
   labs(x = "Number of traps", y = "Revenue") +
   facet_wrap(~ building, scales = "fixed", ncol = 3)
