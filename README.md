@@ -43,6 +43,7 @@ Day 1 Afternoon
 Day 2 Morning 
 
 - Expand our Stan program and check for improved model fit
+- Start discussing hierarchical models if there's time
 
 Day 2 Afternoon
 
@@ -52,6 +53,7 @@ Day 2 Afternoon
 
 Day 3 Morning 
 
+- Andrew Gelman guest appearance
 - Finish Day 2 content
 - Varying slopes model
 
@@ -59,6 +61,4 @@ Day 3 Afternoon
 
 - Time varying parameters
 - Forecasting
-
-
 
