@@ -4,8 +4,7 @@
 
 ```r
 # install R packages
-install.packages(c("dplyr", "lubridate", "ggplot2", "bayesplot", "fs", "stringr", "remotes"))
-remotes::install_github("stan-dev/posterior")
+install.packages(c("dplyr", "lubridate", "ggplot2", "bayesplot", "posterior", "fs", "stringr", "remotes"))
 remotes::install_github("stan-dev/cmdstanr")
 
 # install cmdstan
