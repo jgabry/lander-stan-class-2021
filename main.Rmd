@@ -1,0 +1,1871 @@
+---
+title: "Bayes/Stan Class"
+author: "Lander Analytics"
+date: "July 2021"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+## Setup
+
+```{r knitr-setup, results="hide", message=FALSE, echo=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  dev = "png",
+  dpi = 150,
+  fig.align = "center",
+  comment = NA
+)
+```
+
+```{r setup, results="hide", message=FALSE}
+library(cmdstanr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(bayesplot)
+library(posterior)
+
+theme_set(bayesplot::theme_default())
+
+# seed for R's pseudo-RNGs, not Stan's
+set.seed(1123)
+
+# load data
+pest_data <- readRDS("data/pest_data.RDS")
+standata_hier <- readRDS("data/standata_hier.RDS")
+```
+
+## The problem
+
+### Background
+
+Imagine that you are a statistician or data scientist working as an independent
+contractor. One of your clients is a company that owns many residential buildings
+throughout New York City. The property manager explains that they are concerned about the number
+of cockroach complaints that they receive from their buildings. Previously
+the company has offered monthly visits from a pest inspector as a solution to
+this problem. While this is the default solution of many property managers in
+NYC, the tenants are rarely home when the inspector visits, and so the manager
+reasons that this is a relatively expensive solution that is currently not very
+effective.
+
+One alternative to this problem is to deploy long term bait stations. In this
+alternative, child and pet safe bait stations are installed throughout the
+apartment building. Cockroaches obtain quick acting poison from these stations
+and distribute it throughout the colony. The manufacturer of these bait stations
+provides some indication of the space-to-bait efficacy, but the manager suspects
+that this guidance was not calculated with NYC roaches in mind. NYC roaches, the
+manager rationalizes, have more hustle than traditional roaches, and NYC
+buildings are built differently than other common residential buildings in the
+US. This is particularly important as the unit cost for each bait station per
+year is quite high.
+
+### The goal
+
+The manager wishes to employ your services to help them to find the optimal
+number of roach bait stations they should place in each of their buildings in
+order to minimize the number of cockroach complaints while also keeping
+expenditure on pest control affordable.
+
+A subset of the company's buildings have been randomly selected for an experiment:
+
+* At the beginning of each month, a pest inspector randomly places a number of
+bait stations throughout the building, without knowledge of the current
+cockroach levels in the building
+* At the end of the month, the manager records
+the total number of cockroach complaints in that building.
+* The manager would like to determine the optimal number of bait stations (we'll call them $\textrm{traps}$) that
+balances the lost revenue ($R$) that complaints ($\textrm{complaints}$) generate
+with the all-in cost of maintaining the traps ($\textrm{C}$).
+
+Fortunately, Bayesian data analysis provides a coherent framework for us to tackle this problem.
+
+Formally, we are interested in finding
+
+$$
+\arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[R(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
+$$
+
+The property manager would also, if possible, like to learn how these results
+generalize to buildings they haven't treated so they can understand the
+potential costs of pest control at buildings they are acquiring as well as for
+the rest of their building portfolio.
+
+As the property manager has complete control over the number of traps set, the
+random variable contributing to this expectation is the number of complaints
+given the number of traps. We will model the number of complaints as a function
+of the number of traps.
+
+
+## The data
+
+The data provided to us is in a file called `pest_data.RDS`. Let's
+load the data and see what the structure is:
+
+```{r load-data}
+pest_data <- readRDS('data/pest_data.RDS')
+str(pest_data)
+```
+
+We have access to the following fields:
+
+* `complaints`: Number of complaints per building per month
+* `building_id`: The unique building identifier
+* `traps`: The number of traps used per month per building
+* `date`: The date at which the number of complaints are recorded
+* `live_in_super`: An indicator for whether the building has a live-in super
+* `age_of_building`: The age of the building
+* `total_sq_foot`: The total square footage of the building
+* `average_tenant_age`: The average age of the tenants per building
+* `monthly_average_rent`: The average monthly rent per building
+* `floors`: The number of floors per building
+
+First, let's see how many buildings we have in the data:
+
+```{r describe-data}
+length(unique(pest_data$building_id))
+```
+
+And make some plots of the raw data:
+
+```{r data-plot-1}
+ggplot(pest_data, aes(x = complaints)) +
+  geom_bar()
+```
+
+```{r data-plot-2}
+ggplot(pest_data, aes(x = traps, y = complaints)) +
+  geom_jitter()
+```
+
+```{r data-plot-ts, fig.width = 6, fig.height = 8}
+ggplot(pest_data, aes(x = date, y = complaints, color = live_in_super == TRUE)) +
+  geom_line(aes(linetype = "Number of complaints")) +
+  geom_point(color = "black") +
+  geom_line(aes(y = traps, linetype = "Number of traps"), color = "black", size = 0.25) +
+  facet_wrap(~building_id, scales = "free", ncol = 2, labeller = label_both) +
+  scale_x_date(name = "Month", date_labels = "%b") +
+  scale_y_continuous(name = "", limits = range(pest_data$complaints)) +
+  scale_linetype_discrete(name = "") +
+  scale_color_discrete(name = "Live-in super")
+```
+
+
+The first question we'll look at is just whether the number of complaints per
+building per month is associated with the number of bait stations per building
+per month, ignoring the temporal and across-building variation (we'll get to
+that later). This requires only two variables, $\textrm{complaints}$ and
+$\textrm{traps}$. How should we model the number of complaints?
+
+
+## Modeling count data : Poisson distribution
+
+We already know some rudimentary information about what we should expect. The
+number of complaints over a month should be either zero or an integer. The
+property manager tells us that it is possible but unlikely that number of
+complaints in a given month is zero. Occasionally there are a very large number
+of complaints in a single month. A common way of modeling this sort of skewed,
+single bounded count data is as a Poisson random variable. One concern about
+modeling the outcome variable as Poisson is that the data may be
+over-dispersed, but we'll start with the Poisson model and then check
+whether over-dispersion is a problem by comparing our model's predictions
+to the data.
+
+### Model
+
+Given that we have chosen a Poisson regression, we define the likelihood to be
+the Poisson probability mass function over the number bait stations placed in
+the building, denoted below as `traps`. This model assumes that the mean and
+variance of the outcome variable `complaints` (number of complaints) is the
+same. We'll investigate whether this is a good assumption after we fit the
+model.
+
+For building $b = 1,\dots,10$ at time (month) $t = 1,\dots,12$, we have
+
+$$
+\begin{align*}
+\textrm{complaints}_{b,t} & \sim \textrm{Poisson}(\lambda_{b,t}) \\
+\lambda_{b,t} & = \exp{(\eta_{b,t})} \\
+\eta_{b,t} &= \alpha + \beta \, \textrm{traps}_{b,t}
+\end{align*}
+$$
+
+
+### Prior predictive checks
+
+Before we fit the model to real data, we should check that our priors and model
+can generate plausible simulated data.
+
+In R we can simulate from the prior predictive distribution using a
+function like this:
+
+```{r simulate-poisson-data}
+# using normal distributions for priors on alpha and beta
+simple_poisson_dpg <- function(traps, alpha_mean, alpha_sd, beta_mean, beta_sd) {
+  N <- length(traps)
+  alpha <- rnorm(1, mean = alpha_mean, sd = alpha_sd);
+  beta <- rnorm(1, mean = beta_mean, sd = beta_sd);
+  complaints <- rpois(N, lambda = exp(alpha + beta * traps))
+  return(complaints)
+}
+```
+
+Try with $N(0,10)$ priors on both parameters:
+
+```{r prior-pred-really-bad}
+# you can run this chunk multiple times to keep generating different datasets
+simple_poisson_dpg(
+  pest_data$traps,
+  alpha_mean = 0,
+  alpha_sd = 10,
+  beta_mean = 0,
+  beta_sd = 10
+)
+```
+
+Try with $N(0,1)$ priors on both parameters:
+
+```{r prior-pred-bad}
+simple_poisson_dpg(
+  pest_data$traps,
+  alpha_mean = 0,
+  alpha_sd = 1,
+  beta_mean = 0,
+  beta_sd = 1
+)
+```
+
+Let's calculate some summary statistics of 1000 data sets generated according
+to the $N(0,1)$ priors:
+
+```{r prior-pred-check}
+prior_preds <- t(replicate(1000, expr = {
+  simple_poisson_dpg(
+    traps = pest_data$traps,
+    alpha_mean = 0,
+    alpha_sd = 1,
+    beta_mean = 0,
+    beta_sd = 1
+  )
+}))
+dim(prior_preds)
+```
+
+```{r prior-pred-mean}
+summary(apply(prior_preds, 1, mean))
+```
+```{r prior-pred-min}
+summary(apply(prior_preds, 1, min))
+```
+```{r prior-pred-max}
+summary(apply(prior_preds, 1, max))
+```
+
+
+A more reasonable prior:
+
+```{r prior-pred-better}
+simple_poisson_dpg(
+  traps = pest_data$traps,
+  alpha_mean = log(7),
+  alpha_sd = 0.5,
+  beta_mean = -0.25,
+  beta_sd = 0.5
+)
+```
+
+Simulate 1000 times and calculate summary stats:
+
+```{r prior-pred-better-sim}
+prior_preds <- t(replicate(1000, expr = {
+  simple_poisson_dpg(
+    traps = pest_data$traps,
+    alpha_mean = log(7),
+    alpha_sd = 0.5,
+    beta_mean = -0.25,
+    beta_sd = 0.5
+  )
+}))
+```
+
+```{r prior-pred-better-stats}
+summary(apply(prior_preds, 1, mean))
+
+summary(apply(prior_preds, 1, min))
+
+summary(apply(prior_preds, 1, max))
+```
+
+
+
+### Writing and fitting our first Stan program
+
+```{r replace-rstan-syntax-checking}
+# RStudio has support for Stan syntax checking but it uses RStan not CmdStanR.
+# Because RStan is a few Stan versions behind CmdStanR we need to force 
+# RStudio's syntax checking to use CmdStanR so we can use the latest Stan syntax.
+# Once CmdStanR is on CRAN we will work with RStudio to incorporate CmdStanR
+# syntax checking automatically.
+source("replace-rstan-syntax-check.R")
+```
+
+Let's encode the model in a Stan program.
+
+* Write `simple_poisson_regression.stan` together, put in `stan_programs` directory.
+
+```{r comp_simple_pois}
+comp_simple_pois <- cmdstan_model("stan_programs/simple_poisson_regression.stan")
+```
+
+To fit the model to the data we'll first create a list to pass
+to Stan using the variables in the `pest_data` data frame. The names of the
+list elements must match the names used in the `data` block of the Stan program.
+
+```{r stan-data}
+standata_simple <- list(
+  N = nrow(pest_data),
+  complaints = pest_data$complaints,
+  traps = pest_data$traps
+)
+str(standata_simple)
+```
+
+We have already compiled the model, so we can jump straight to sampling from it.
+
+```{r fit_simple_pois}
+fit_simple_pois <- comp_simple_pois$sample(
+  data = standata_simple,
+  # these are the defaults but specifying them anyway
+  # so you can see how to use them:
+  chains = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000
+)
+```
+
+```{r fit_simple_pois-summary}
+# The summary method calls posterior::summarize_draws()
+fit_simple_pois$summary(variables = c("alpha", "beta"))
+```
+
+We can also plot the posterior distributions:
+
+```{r fit_simple_pois-mcmc_hist}
+# https://mc-stan.org/bayesplot/reference/MCMC-distributions
+draws <- fit_simple_pois$draws(c("alpha", "beta"), format = "matrix")
+mcmc_hist(draws) # marginal posteriors of alpha and beta
+mcmc_scatter(draws, alpha = 0.2, size = 1) # joint posterior of (alpha, beta)
+```
+
+And compare them to draws from the prior:
+
+```{r compare-prior-posterior}
+alpha_prior_post <- cbind(
+  alpha_prior = rnorm(4000, log(7), 1),
+  alpha_posterior = draws[, "alpha"]
+)
+mcmc_hist(
+  alpha_prior_post,
+  facet_args = list(nrow = 2),
+  binwidth = 0.1
+) + xlim(range(alpha_prior_post))
+
+
+beta_prior_post <- cbind(
+  beta_prior = rnorm(4000, -0.25, 0.5),
+  beta_posterior = draws[, "beta"]
+)
+mcmc_hist(
+  beta_prior_post,
+  facet_args = list(nrow = 2),
+  binwidth = 0.05
+) + xlim(range(beta_prior_post))
+```
+
+
+From the posterior of `beta`, it appears the number of bait stations set in a
+building is associated with the number of complaints about cockroaches that were
+made in the following month. However, we still need to consider how well the
+model fits.
+
+
+### Posterior predictive checking
+
+```{r fit_simple_pois-y_rep}
+y_rep <- fit_simple_pois$draws("y_rep", format = "matrix")
+dim(y_rep) # number of posterior draws x number of data points
+```
+
+```{r fit_simple_pois-ppc_dens_overlay}
+# https://mc-stan.org/bayesplot/reference/PPC-distributions#plot-descriptions
+ppc_dens_overlay(y = standata_simple$complaints, yrep = y_rep[1:200,])
+```
+
+In the plot above we have the kernel density estimate of the observed data ($y$,
+thicker curve) and 200 simulated data sets ($y_{rep}$, thin curves) from the
+posterior predictive distribution. Here the posterior predictive
+simulations are not as dispersed as the real data and don't seem to capture the
+rate of zeros well at all. This suggests the Poisson model may not be sufficiently
+flexible for this data.
+
+Let's explore this further by looking directly at the proportion of zeros in the
+real data and predicted data.
+```{r fit_simple_pois-ppc_stat}
+# calculate the proportion of zeros in a vector
+prop_zero <- function(x) mean(x == 0)
+
+# https://mc-stan.org/bayesplot/reference/PPC-test-statistics#plot-descriptions
+ppc_stat(
+  y = standata_simple$complaints,
+  yrep = y_rep,
+  stat = "prop_zero",
+  binwidth = .01
+)
+```
+The plot above shows the observed proportion of zeros (thick vertical line) and
+a histogram of the proportion of zeros in each of the simulated data sets. It is
+clear that the model does not capture this feature of the data well at all.
+
+
+The rootogram is another useful plot to compare the observed vs expected number
+of complaints. This is a plot of the square root of the expected counts
+(continuous line) vs the observed counts (blue histogram)
+
+```{r fit_simple_pois-ppc_rootogram}
+# https://mc-stan.org/bayesplot/reference/PPC-discrete#plot-descriptions
+ppc_rootogram(standata_simple$complaints, yrep = y_rep)
+```
+
+If the model was fitting well these would be relatively similar, however in this
+figure we can see the number of complaints is underestimated if there are few
+complaints, over-estimated for medium numbers of complaints, and underestimated
+if there are a large number of complaints.
+
+The `ppc_bars()` function will make a bar plot of the observed values and
+overlay prediction intervals but not on the square root scale (unlike the
+rootogram):
+
+```{r fit_simple_pois-ppc_bars}
+# https://mc-stan.org/bayesplot/reference/PPC-discrete#plot-descriptions
+ppc_bars(standata_simple$complaints, yrep = y_rep) + labs(x = "Complaints")
+```
+
+
+We can also view how the predicted number of complaints varies with the number
+of traps:
+
+```{r fit_simple_pois-ppc_intervals}
+# jitter number of traps (x) since we have multiple observations at some values
+ppc_intervals(
+  y = standata_simple$complaints, 
+  yrep = y_rep,
+  x = standata_simple$traps + rnorm(standata_simple$N, 0, 0.2)
+) +  
+  labs(
+    x = "Number of traps (jittered)", 
+    y = "Predicted number of complaints"
+  )
+```
+
+
+## Expanding the model: multiple predictors
+
+Currently, our model's mean parameter is a rate of complaints per 30 days, but
+we're modeling a process that occurs over an area as well as over time. We have
+the square footage of each building, so if we add that information into the
+model, we can interpret our parameters as a rate of complaints per square foot
+per 30 days.
+
+$$
+\begin{align*}
+\textrm{complaints}_{b,t} & \sim \textrm{Poisson}(\textrm{sq_foot}_b\,\lambda_{b,t}) \\
+\lambda_{b,t} & = \exp{(\eta_{b,t} )} \\
+\eta_{b,t} &= \alpha + \beta \, \textrm{traps}_{b,t}
+\end{align*}
+$$
+
+The term $\text{sq_foot}$ is called an exposure term. If we log the term, we can
+put it in $\eta_{b,t}$:
+
+$$
+\begin{align*}
+\textrm{complaints}_{b,t} & \sim \textrm{Poisson}(\lambda_{b,t}) \\
+\lambda_{b,t} & = \exp{(\eta_{b,t} )} \\
+\eta_{b,t} &= \alpha + \beta \, \textrm{traps}_{b,t} + \textrm{log_sq_foot}_b
+\end{align*}
+$$
+
+
+We will also include whether there is a live-in super or not as a predictor
+for the number of complaints, which gives us gives us:
+
+$$
+\eta_{b,t} = \alpha + \beta \, \textrm{traps}_{b,t} +
+\beta_{\rm super} \textrm{live_in_super}_{b,t} +
+\textrm{log_sq_foot}_b
+$$
+
+Add these new variables to the data list for Stan.
+
+```{r add-predictors-to-standata}
+standata_simple$log_sq_foot <- pest_data$log_sq_foot_1e4 # log(total_sq_foot/1e4)
+standata_simple$live_in_super <- pest_data$live_in_super
+```
+
+
+### Stan program for Poisson multiple regression
+
+Now we need a new Stan program that uses multiple predictors.
+
+* Write `multiple_poisson_regression.stan`
+
+```{r comp_multi_pois}
+comp_multi_pois <- cmdstan_model("stan_programs/multiple_poisson_regression.stan")
+```
+
+### Fit the Poisson multiple regression
+
+```{r fit_multi_pois}
+fit_multi_pois <- comp_multi_pois$sample(data = standata_simple,
+                                         refresh = 0) # turn off printed progress updates
+```
+```{r fit_multi_pois-summary}
+fit_multi_pois$summary()
+```
+
+
+```{r fit_multi_pois-ppc_dens_overlay}
+y_rep <- fit_multi_pois$draws("y_rep", format = "matrix")
+ppc_dens_overlay(standata_simple$complaints, y_rep[1:200,])
+```
+
+This again looks like we haven't captured the smaller counts very well, nor
+have we captured the larger counts.
+
+We're still severely underestimating the proportion of zeros in the data:
+
+```{r fit_multi_pois-ppc-stat}
+prop_zero <- function(x) mean(x == 0)
+ppc_stat(
+  y = standata_simple$complaints,
+  yrep = y_rep,
+  stat = "prop_zero",
+  binwidth = 0.01
+)
+```
+
+Ideally this vertical line would fall somewhere within the histogram.
+
+We can also plot uncertainty intervals for the predicted complaints for different
+numbers of traps.
+
+```{r fit_multi_pois-ppc_intervals}
+ppc_intervals(
+  y = standata_simple$complaints,
+  yrep = y_rep,
+  x = standata_simple$traps + rnorm(standata_simple$N, 0, 0.2)
+) +
+  labs(
+    x = "Number of traps (jittered)", 
+    y = "Predicted number of complaints"
+  )
+```
+
+We can see that we've increased the tails a bit more at the larger numbers of traps
+but we still have some large observed numbers of complaints that the model
+would consider extremely unlikely events.
+
+
+## Modeling count data with the Negative Binomial
+
+When we considered modeling the data using a Poisson, we saw that the model
+didn't appear to fit as well to the data as we would like. In particular the
+model underpredicted low and high numbers of complaints, and overpredicted the
+medium number of complaints. This is one indication of over-dispersion, where
+the variance is larger than the mean. A Poisson model doesn't fit over-dispersed
+count data very well because the same parameter $\lambda$, controls both the
+expected counts and the variance of these counts. The natural alternative to
+this is the negative binomial model:
+
+$$
+\begin{align*}
+\text{complaints}_{b,t} & \sim \text{Neg-Binomial}(\lambda_{b,t}, \phi) \\
+\lambda_{b,t} & = \exp{(\eta_{b,t})} \\
+\eta_{b,t} &= \alpha + \beta \, {\rm traps}_{b,t} + \beta_{\rm super} \, {\rm super}_{b} + \text{log_sq_foot}_{b}
+\end{align*}
+$$
+
+In Stan the negative binomial mass function we'll use is called
+$\texttt{neg_binomial_2_log}(\text{ints} \, y, \text{reals} \, \eta, \text{reals} \, \phi)$
+in Stan. Like the `poisson_log` function, this negative binomial mass function
+that is parameterized in terms of its log-mean, $\eta$, but it also has a
+precision $\phi$ such that
+
+$$
+\mathbb{E}[y] \, = \lambda = \exp(\eta)
+$$
+
+$$
+\text{Var}[y] = \lambda + \lambda^2/\phi = \exp(\eta) + \exp(\eta)^2 / \phi.
+$$
+
+As $\phi$ gets larger the term $\lambda^2 / \phi$ approaches zero and so
+the variance of the negative-binomial approaches $\lambda$, i.e., the
+negative-binomial gets closer and closer to the Poisson.
+
+### Stan program for negative-binomial regression
+
+* Write `multiple_NB_regression.stan` together
+
+```{r comp_multi_NB}
+comp_multi_NB <- cmdstan_model("stan_programs/multiple_NB_regression.stan")
+```
+
+
+### Fit to data and check the fit
+
+```{r fit_multi_NB}
+fit_multi_NB <- comp_multi_NB$sample(data = standata_simple, refresh = 0)
+```
+
+
+```{r fit_multi_NB-mcmc_hist}
+mcmc_hist(fit_multi_NB$draws(c("inv_phi", "phi")))
+```
+
+Let's look at our predictions vs. the data.
+
+```{r fit_multi_NB-ppc_dens_overlay}
+y_rep <- fit_multi_NB$draws("y_rep", format = "matrix")
+ppc_dens_overlay(y = standata_simple$complaints, yrep = y_rep[1:200,])
+```
+
+It appears that our model now captures both the number of small counts better
+as well as the tails.
+
+Let's check the proportion of zeros:
+
+```{r fit_multi_NB-ppc_stat}
+ppc_stat(
+  y = standata_simple$complaints,
+  yrep = y_rep,
+  stat = "prop_zero",
+  binwidth = 0.01
+)
+```
+
+
+Check predictions by number of traps:
+
+```{r fit_multi_NB-ppc_intervals}
+ppc_intervals(
+  y = standata_simple$complaints,
+  yrep = y_rep,
+  x = standata_simple$traps + rnorm(standata_simple$N, 0, 0.2)
+) +
+  labs(
+    x = "Number of traps (jittered)", 
+    y = "Predicted number of complaints"
+  )
+```
+
+We haven't used the fact that the data are clustered by building yet. A posterior
+predictive check might elucidate whether it would be a good idea to add the building
+information into the model.
+
+```{r fit_multi_NB-ppc_stat_grouped, fig.width=7, fig.height=6}
+ppc_stat_grouped(
+  y = standata_simple$complaints,
+  yrep = y_rep,
+  group = pest_data$building_id,
+  stat = "mean",
+  binwidth = 0.2
+)
+```
+
+We're getting plausible predictions for most building means but some are
+estimated better than others and some have large uncertainties.
+If we explicitly model the variation across buildings we may be able to
+get better estimates.
+
+## Hierarchical modeling
+
+### Modeling varying intercepts for each building
+
+Let's add a hierarchical intercept parameter, $\mu_b$ at the building level
+to our model.
+
+$$
+\text{complaints}_{b,t} \sim \text{Neg-Binomial}(\lambda_{b,t}, \phi) \\
+\lambda_{b,t}  = \exp{(\eta_{b,t})} \\
+\eta_{b,t} = \mu_b + \beta \, {\rm traps}_{b,t} + \beta_{\rm super}\, {\rm super}_b + \text{log_sq_foot}_b \\
+\mu_b \sim \text{Normal}(\alpha, \sigma_{\mu})
+$$
+
+In our Stan model, $\mu_b$ is the $b$-th element of the vector
+$\texttt{mu}$ which has one element per building.
+
+One of our predictors varies only by building, so we can rewrite the above model
+more efficiently like so:
+
+$$
+\eta_{b,t} = \mu_b + \beta \, {\rm traps}_{b,t} + \text{log_sq_foot}_b\\
+\mu_b \sim \text{Normal}(\alpha +  \beta_{\text{super}} \, \text{super}_b , \sigma_{\mu})
+$$
+
+
+We have more information at the building level as well, like the average age of
+the residents, the average age of the buildings, and the average per-apartment
+monthly rent so we can add that data into a matrix called
+`building_data`, which will have one row per building and four columns:
+
+* `live_in_super`
+* `age_of_building`
+* `average_tentant_age`
+* `monthly_average_rent`
+
+We'll write the Stan model like:
+
+$$
+\eta_{b,t} = \mu_b + \beta \, {\rm traps} + \text{log_sq_foot}\\
+\mu \sim \text{Normal}(\alpha + \texttt{building_data} \, \zeta, \,\sigma_{\mu})
+$$
+
+### Prepare building data for hierarchical model
+
+We'll need to do some more data prep before we can fit our models. Among other
+things, in order to use the building variable in Stan we will need to transform
+it from a factor variable to an integer variable.
+
+```{r prep-data-hier}
+N_months <- length(unique(pest_data$date))
+N_buildings <- length(unique(pest_data$building_id))
+
+# Add some IDs for building and month
+pest_data <- pest_data %>%
+  mutate(
+    building_fac = factor(building_id, levels = unique(building_id)),
+    building_idx = as.integer(building_fac),
+    ids = rep(1:N_months, N_buildings),
+    mo_idx = lubridate::month(date) # we'll use this later
+  )
+
+# Center and rescale the building specific data
+building_data <- pest_data %>%
+    select(
+      building_idx,
+      live_in_super,
+      age_of_building,
+      average_tenant_age,
+      monthly_average_rent
+    ) %>%
+    unique() %>%
+    arrange(building_idx) %>%
+    select(-building_idx) %>%
+    scale(scale=FALSE) %>% # this centers (subtracts mean) but doesn't divide by sd
+    as.data.frame() %>%
+    mutate( # scale by constants to put variables on similar scales
+      age_of_building = age_of_building / 10,
+      average_tenant_age = average_tenant_age / 10,
+      monthly_average_rent = monthly_average_rent / 1000
+    ) %>%
+    as.matrix()
+
+# Make data list for Stan
+standata_hier <-
+  with(pest_data,
+        list(complaints = complaints,
+             N = length(complaints),
+             traps = traps,
+             log_sq_foot = log(pest_data$total_sq_foot/1e4),
+             M = N_months,
+             mo_idx = as.integer(as.factor(date)),
+             J = N_buildings,
+             K = ncol(building_data), # number of building-specific variables
+             building_idx = building_idx,
+             building_data = building_data
+             )
+        )
+```
+
+### Compile and fit the hierarchical model
+
+Let's compile the model.
+
+```{r comp_hier_NB, results="hide", message=FALSE}
+comp_hier_NB <- cmdstan_model("stan_programs/hier_NB_regression.stan")
+```
+
+Fit the model to data.
+
+```{r fit_hier_NB}
+fit_hier_NB <-
+  comp_hier_NB$sample(
+    data = standata_hier,
+    refresh = 500,
+    # can run markov chains in parallel. you can check how many cores you
+    # have available using parallel::detectCores()
+    chains = 4,
+    parallel_chains = 4
+  )
+```
+
+### Diagnostics
+
+We get a bunch of warnings from Stan about divergent transitions, which is
+an indication that there may be regions of the posterior that have not been
+explored by the Markov chains.
+
+Divergences are discussed in more detail in the case study
+[Diagnosing Biased Inference with Divergences](https://mc-stan.org/users/documentation/case-studies/divergences_and_bias.html),
+the **bayesplot** [MCMC diagnostics vignette](http://mc-stan.org/bayesplot/articles/visual-mcmc-diagnostics.html)
+and [_A Conceptual Introduction to Hamiltonian Monte Carlo_](https://arxiv.org/abs/1701.02434).
+
+In this example we will see that we have divergent transitions because we need to
+reparameterize our model - i.e., we will retain the overall structure of the
+model, but transform some of the parameters so that it is easier for Stan to
+sample from the parameter space. Before we go through exactly how to do this
+reparameterization, we will first go through what indicates that this is
+something that reparameterization will resolve. We will go through:
+
+1. Examining the fitted parameter values, including the effective sample size
+2. Plots that reveal particular patterns in locations of the divergences.
+
+We can check the effective sample sizes by printing the parameters that are of most interest.
+
+```{r fit_hier_NB-summary-low-ESS}
+fit_hier_NB$summary(variables = c("sigma_mu", "beta", "alpha", "phi", "mu"))
+```
+You can see that the effective sample sizes are quite low for many of the parameters
+relative to the total number of samples (4000). This alone isn't indicative of the need
+to reparameterize, but it indicates that we should look further at the trace
+plots and pairs plots. First let's look at the traceplots to see if the divergent
+transitions form a pattern.
+
+```{r fit_hier_NB-mcmc_trace-divs}
+# change bayesplot color scheme (to make chains very different colors)
+color_scheme_set("brewer-Spectral")
+mcmc_trace(
+  # use as.array to keep the markov chains separate for trace plots
+  fit_hier_NB$draws("sigma_mu"),
+  np = nuts_params(fit_hier_NB),
+  window = c(500, 1000) # zoom into a window to see more clearly
+)
+color_scheme_set("blue")
+```
+
+Looks like the divergences (marked in red below the traceplot)
+correspond to spots where sampler gets stuck.
+
+```{r fit_hier_NB-mcmc_scatter-divs}
+# assign to object so we can compare to another plot later
+
+scatter_with_divs <- mcmc_scatter(
+  fit_hier_NB$draws(),
+  pars = c("mu[4]", "sigma_mu"),
+  # look at sigma on log-scale (what Stan uses under the hood for positive parameters)
+  transform = list("sigma_mu" = "log"),
+  size = 1,
+  alpha = 0.3,
+  np = nuts_params(fit_hier_NB),
+  np_style = scatter_style_np(div_size = 1.5) # change style of divergences points
+)
+scatter_with_divs + coord_equal()
+```
+
+What we have here is a cloud-like shape, with most of the divergences clustering
+towards the bottom. We'll see a bit later that we actually want this to look more
+like a funnel than a cloud, but the divergences are indicating that the sampler
+can't explore the narrowing neck of the funnel.
+
+One way to see why we should expect some version of a funnel is to look at some
+simulations from the _prior_, which we can do without MCMC and thus with no risk
+of sampling problems:
+
+```{r plot-prior-funnel}
+draw_from_prior <- function() {
+  sigma_mu_prior <- abs(rnorm(1, mean = 0, sd = 1))
+  mu_prior <- rnorm(1, mean = 0, sd = sigma_mu_prior)
+  c("mu" = mu_prior, "log(sigma_mu)" = log(sigma_mu_prior))
+}
+
+# plot a bunch of draws
+prior_draws <- t(replicate(1000, draw_from_prior()))
+mcmc_scatter(prior_draws)
+```
+
+Of course, if the data is at all informative we shouldn't expect the posterior
+to look exactly like the prior. But unless the data is incredibly informative
+about the parameters (and the posterior concentrates away from the narrow neck of
+the funnel) the sampler is going to have to confront the funnel geometry.
+(See the bayesplot
+[Visual MCMC Diagnostics](https://mc-stan.org/bayesplot/articles/visual-mcmc-diagnostics.html)
+vignette for more on this.)
+
+### Reparameterize and recheck diagnostics
+
+Instead, we should use the **non-centered parameterization** for $\mu_b$.
+This involves taking _standard normal_ random variables and shifting and
+scaling them to have the mean and standard deviation we want using
+properties of the normal distribution.
+
+$$
+\mu_{\rm raw} \sim \text{Normal}(0,1) \\
+\mu = \text{mean} + \text{sd} \times \mu_{\rm raw} \\
+\mu = (\alpha + \texttt{building_data} \, \zeta) + \sigma_{\mu} \mu_{\rm raw}
+$$
+
+This implies $\texttt{mu}$ is distributed
+$\text{Normal}(\alpha + \texttt{building_data}\, \zeta, \sigma_\mu)$ as before,
+but it decouples the dependence of the density of each element of
+$\texttt{mu}$ from $\texttt{sigma_mu}$ ($\sigma_\mu$) and makes the
+geometry easier for the sampler to navigate.
+
+To implement this in the Stan program we need to put $\texttt{mu_raw}$ in the parameters block (with a $\text{Normal}(0, 1)$ prior in the model
+block), and then define $\texttt{mu}$ in the transformed parameters block.
+
+```
+transformed parameters {
+  vector[J] mu = alpha + building_data * zeta + sigma_mu * mu_raw;
+}
+```
+
+```{r comp_hier_NB_ncp}
+comp_hier_NB_ncp <- cmdstan_model("stan_programs/hier_NB_regression_ncp.stan")
+```
+
+Fit the model to the data.
+
+```{r fit_hier_NB_ncp, results="hold"}
+fit_hier_NB_ncp <- comp_hier_NB_ncp$sample(
+  data = standata_hier,
+  refresh = 500,
+  chains = 4,
+  parallel_chains = 4
+)
+```
+
+You should have no divergences (or only a few) this time and much improved
+effective sample sizes:
+
+```{r fit_hier_NB_ncp-summary-high-ESS}
+fit_hier_NB_ncp$summary(variables = c("sigma_mu", "beta", "alpha", "phi", "mu"))
+```
+
+
+Let's make the same scatter plot we made for the model with many divergences and
+compare:
+
+```{r compare-cp-ncp-scatterplots}
+scatter_no_divs <- mcmc_scatter(
+  fit_hier_NB_ncp$draws(),
+  pars = c("mu[4]", "sigma_mu"),
+  transform = list("sigma_mu" = "log"),
+  size = 1,
+  alpha = 0.3,
+  np = nuts_params(fit_hier_NB_ncp)
+)
+
+bayesplot_grid(
+  scatter_with_divs, scatter_no_divs,
+  grid_args = list(ncol = 2),
+  ylim = c(-10, 1),
+  subtitles = c("Centered parameterization",
+                "Non-centered parameterization")
+)
+```
+
+Comparing the plots, we see that the divergences were a sign that there was part
+of the posterior that the chains were not exploring.
+
+The marginal PPC plot, again.
+
+```{r fit_hier_NB_ncp-ppc_dens_overlay}
+y_rep <- fit_hier_NB_ncp$draws("y_rep", format = "matrix")
+ppc_dens_overlay(standata_hier$complaints, y_rep[1:200,])
+```
+
+This looks quite nice.
+
+If we've captured the building-level means well, then the distribution of
+predicted means by building should match well with the observed means of the
+quantity of building complaints by month.
+
+```{r fit_hier_NB_ncp-ppc_stat_grouped}
+ppc_stat_grouped(
+  y = standata_hier$complaints,
+  yrep = y_rep,
+  group = pest_data$building_id,
+  stat = "mean",
+  binwidth = 0.5
+)
+```
+
+We weren't doing terribly with the building-specific means before, but now they
+are all estimated much more precisely. The model is also able to do a
+decent job estimating the probability of zero complaints:
+
+```{r fit_hier_NB_ncp-ppc_stat-prop-zero}
+prop_zero <- function(x) mean(x == 0)
+ppc_stat(
+  y = standata_hier$complaints,
+  yrep = y_rep,
+  stat = prop_zero,
+  binwidth = 0.02
+)
+
+# plot separately for each building
+ppc_stat_grouped(
+  y = standata_hier$complaints,
+  yrep = y_rep,
+  group = pest_data$building_id,
+  stat = prop_zero,
+  binwidth = 0.1
+)
+```
+
+
+Check quantiles of predictions:
+
+```{r fit_hier_NB_ncp-ppc_stat-quantiles}
+q90 <- function(x) quantile(x, probs = 0.9)
+ppc_stat(
+  y = standata_hier$complaints,
+  yrep = y_rep,
+  stat = "q90",
+  binwidth = 1
+)
+```
+
+Predictions by number of traps:
+
+```{r fit_hier_NB_ncp-ppc_intervals_grouped}
+ppc_intervals_grouped(
+  y = standata_hier$complaints,
+  yrep = y_rep,
+  x = standata_hier$traps + rnorm(standata_hier$N, 0, 0.2), # jitter
+  group = standata_hier$building_idx
+  # difference between grouping by pest_data$building_id and standata_hier$building_idx
+  # is that the latter is consecutive from 1 to N_buildings to make things easier
+  # to code in Stan
+) +
+  labs(
+    x = "Number of traps (jittered)",
+    y = "Predicted number of complaints",
+    title = "Traps vs predicted complaints by building"
+  )
+```
+
+
+### Varying intercepts _and_ varying slopes
+
+We have some new data that extends the number of time points for which we
+have observations for each building. This will let us explore how to expand the
+model a bit more with varying _slopes_ in addition to the varying intercepts
+and later also model temporal variation.
+
+```{r load_longer_data}
+standata_hier_long <- readRDS("data/standata_hier_long.RDS")
+```
+
+Perhaps if the levels of complaints differ by building, the coefficient for the
+effect of traps on building does too. We can add this to our model and observe
+the fit.
+
+$$
+\text{complaints}_{b,t} \sim \text{Neg-Binomial}(\lambda_{b,t}, \phi)  \\
+\lambda_{b,t} = \exp{(\eta_{b,t})}\\
+\eta_{b,t} = \mu_b + \kappa_b \, \texttt{traps}_{b,t} + \text{log_sq_foot}_b \\
+\mu_b \sim \text{Normal}(\alpha + \texttt{building_data} \, \zeta, \sigma_{\mu}) \\
+\kappa_b \sim \text{Normal}(\beta + \texttt{building_data} \, \gamma, \sigma_{\kappa})
+$$
+
+Let's compile and run the model.
+
+```{r comp_hier_NB_slopes}
+comp_hier_NB_slopes <- cmdstan_model("stan_programs/hier_NB_regression_ncp_slopes.stan")
+```
+
+```{r fit_hier_NB_slopes, results="hold"}
+fit_hier_NB_slopes <-
+  comp_hier_NB_slopes$sample(
+    data = standata_hier_long,
+    chains = 4,
+    parallel_chains = 4,
+    adapt_delta = 0.95
+  )
+```
+
+```{r fit_hier_NB_slopes-summary}
+fit_hier_NB_slopes$summary(variables = c("alpha", "beta", "sigma_kappa", "kappa", "sigma_mu", "mu"))
+```
+
+To see if the model infers building-to-building differences in, we can plot a
+histogram of our marginal posterior distribution for `sigma_kappa`.
+
+```{r fit_hier_NB_slopes-mcmc_hist, fig.width = 3, fig.height = 3}
+mcmc_hist(fit_hier_NB_slopes$draws("sigma_kappa"), binwidth = 0.01)
+```
+
+While the model can't specifically rule out zero from the posterior, it does
+have mass at small non-zero numbers, so we will leave in the hierarchy over
+$\texttt{kappa}$. Plotting the marginal data density again, we can see the model
+still looks well calibrated.
+
+```{r fit_hier_NB_slopes-ppc_dens_overlay}
+y_rep <- fit_hier_NB_slopes$draws("y_rep", format = "matrix")
+ppc_dens_overlay(
+  y = standata_hier_long$complaints,
+  yrep = y_rep[1:200,]
+)
+```
+
+Check quantiles of predictions:
+
+```{r fit_hier_NB_slopes-ppc_stat-quantile}
+q90 <- function(x) quantile(x, probs = 0.9)
+ppc_stat(
+  y = standata_hier_long$complaints,
+  yrep = y_rep,
+  stat = "q90"
+)
+```
+
+## Time varying effects and structured priors
+
+We haven't looked at how cockroach complaints change over time. Let's look
+at plots over time. Each panel below is a month and we can see that we're
+making basically the same predictions for each month since we haven't
+encoding any time structure into the model:
+
+```{r fit_hier_NB_slopes-ppc_stat_grouped-by-month}
+y_rep <- fit_hier_NB_slopes$draws("y_rep", format = "matrix")
+select_vec <- which(standata_hier_long$mo_idx %in% 1:12)
+ppc_stat_grouped(
+  y = standata_hier_long$complaints[select_vec],
+  yrep = y_rep[,select_vec],
+  group = standata_hier_long$mo_idx[select_vec],
+  stat = 'mean'
+) + xlim(0, 11)
+```
+
+To address this we might augment our model with a log-additive monthly effect,
+$\texttt{mo}_t$.
+
+$$
+\eta_{b,t} = \mu_b + \kappa_b \, \texttt{traps}_{b,t} + \texttt{mo}_t + \text{log_sq_foot}_b
+$$
+
+We have complete freedom over how to specify the prior for $\texttt{mo}_t$.
+There are several competing factors for how the number of complaints might
+change over time. It makes sense that there might be more roaches in the
+environment during the summer, but we might also expect that there is more roach
+control in the summer as well. Given that we're modeling complaints, maybe after
+the first sighting of roaches in a building, residents are more vigilant, and
+thus complaints of roaches would increase.
+
+This can be a motivation for using an autoregressive prior for our monthly
+effects. The model is as follows:
+
+$$
+\texttt{mo}_t \sim \text{Normal}(\rho \, \texttt{mo}_{t-1}, \sigma_\texttt{mo}) \\
+\equiv \\
+\texttt{mo}_t = \rho \, \texttt{mo}_{t-1} +\epsilon_t , \quad \epsilon_t \sim \text{Normal}(0, \sigma_\texttt{mo}) \\
+\quad \rho \in [-1,1]
+$$
+
+This equation says that the monthly effect in month $t$ is directly related to
+the last month's monthly effect. Given the description of the process above,
+it seems like there could be either positive or negative associations between
+the months, but there should be a bit more weight placed on positive
+$\rho$s, so we'll put an informative prior that pushes the parameter $\rho$ towards
+0.5.
+
+Before we write our prior, however, we have a problem: Stan doesn't implement any densities
+that have support on $[-1,1]$. We can use variable transformation of a raw variable
+defined on $[0,1]$ to to give us a density on $[-1,1]$. Specifically,
+
+$$
+\rho_{\text{raw}} \in [0, 1] \\
+\rho = 2 \times \rho_{\text{raw}} - 1
+$$
+
+Then we can use a beta prior on $\rho_\text{raw}$ to push our estimate of $\rho$ towards 0.5.
+
+For example a `rho_raw ~ beta(10, 5)` prior would result in the following:
+
+```{r plot-rho-priors}
+rho_raw <- rbeta(1000, 10, 5)
+rho <- 2 * rho_raw - 1
+rho_priors <- cbind(rho_raw, rho)
+mcmc_hist(rho_priors, facet_args = list(nrow = 2)) + xlim(-1, 1)
+```
+
+One further wrinkle is that we have a prior for $\texttt{mo}_t$ that depends on
+$\texttt{mo}_{t-1}$. That is, we are working with the _conditional_ distribution
+of $\texttt{mo}_t$ given $\texttt{mo}_{t-1}$.
+But what should we do about the prior for $\texttt{mo}_1$, for which we don't
+have a previous time period in the data?
+
+We need to work out the _marginal_ distribution of the first observation.
+Thankfully we can use the fact that AR models are stationary, so
+$\text{Var}(\texttt{mo}_t) = \text{Var}(\texttt{mo}_{t-1})$ and
+$\mathbb{E}(\texttt{mo}_t) = \mathbb{E}(\texttt{mo}_{t-1})$ for all $t$.
+Therefore the marginal distribution of $\texttt{mo}_1$ is the same as the
+marginal distribution of any $\texttt{mo}_t$.
+
+First we derive the marginal variance of $\texttt{mo}_{t}$.
+
+$$
+\text{Var}(\texttt{mo}_t) = \text{Var}(\rho \texttt{mo}_{t-1} + \epsilon_t)  \\
+\text{Var}(\texttt{mo}_t) = \text{Var}(\rho \texttt{mo}_{t-1}) + \text{Var}(\epsilon_t)
+$$
+where the second line holds by independence of $\epsilon_t$ and $\epsilon_{t-1})$.
+Then, using the fact that $Var(cX) = c^2Var(X)$ for a constant $c$ and the fact
+that, by stationarity, $\textrm{Var}(\texttt{mo}_{t-1}) = \textrm{Var}(\texttt{mo}_{t})$,
+we then obtain:
+
+$$
+\text{Var}(\texttt{mo}_t)= \rho^2 \text{Var}( \texttt{mo}_{t})  + \sigma_\texttt{mo}^2 \\
+\text{Var}(\texttt{mo}_t) = \frac{\sigma_\texttt{mo}^2}{1 - \rho^2}
+$$
+
+For the mean of $\texttt{mo}_t$ things are a bit simpler:
+
+$$
+\mathbb{E}(\texttt{mo}_t) = \mathbb{E}(\rho \, \texttt{mo}_{t-1} + \epsilon_t) \\
+\mathbb{E}(\texttt{mo}_t) = \mathbb{E}(\rho \, \texttt{mo}_{t-1}) + \mathbb{E}(\epsilon_t) \\
+$$
+
+Since $\mathbb{E}(\epsilon_t) = 0$ by assumption we have
+
+$$
+\mathbb{E}(\texttt{mo}_t) = \mathbb{E}(\rho \, \texttt{mo}_{t-1})  + 0\\
+\mathbb{E}(\texttt{mo}_t) = \rho \, \mathbb{E}(\texttt{mo}_{t}) \\
+\mathbb{E}(\texttt{mo}_t) - \rho \mathbb{E}(\texttt{mo}_t) = 0  \\
+\mathbb{E}(\texttt{mo}_t) = 0/(1 - \rho)
+$$
+
+which for $\rho \neq 1$ yields $\mathbb{E}(\texttt{mo}_{t}) = 0$.
+
+We now have the marginal distribution for $\texttt{mo}_{t}$, which, in our case,
+we will use for $\texttt{mo}_1$. The full AR(1) specification is then:
+
+$$
+\texttt{mo}_1 \sim \text{Normal}\left(0, \frac{\sigma_\texttt{mo}}{\sqrt{1 - \rho^2}}\right) \\
+\texttt{mo}_t \sim \text{Normal}\left(\rho \, \texttt{mo}_{t-1}, \sigma_\texttt{mo}\right) \forall t > 1
+$$
+
+Let's compile and fit the model.
+```{r comp_hier_NB_mos}
+comp_hier_NB_mos <- cmdstan_model("stan_programs/hier_NB_regression_ncp_slopes_mos.stan")
+```
+
+```{r fit_hier_NB_mos, results="hold"}
+fit_hier_NB_mos <-
+  comp_hier_NB_mos$sample(
+    data = standata_hier_long,
+    chains = 4,
+    parallel_chains = 4,
+    adapt_delta = 0.95
+  )
+```
+
+```{r fit_hier_NB_mos-summary}
+fit_hier_NB_mos$summary()
+```
+
+In the interest of brevity, we won't go on expanding the model, though we
+certainly could. What other information would help us understand the data
+generating process better? What other aspects of the data generating process
+might we want to capture that we're not capturing now?
+
+As usual, we run through our posterior predictive checks.
+
+```{r fit_hier_NB_mos-ppc_dens_overlay}
+y_rep <- fit_hier_NB_mos$draws("y_rep", format = "matrix")
+ppc_dens_overlay(
+  y = standata_hier_long$complaints,
+  yrep = y_rep[1:200,]
+)
+```
+
+```{r fit_hier_NB_mos-ppc_stat}
+select_vec <- which(standata_hier_long$mo_idx %in% 1:12)
+ppc_stat_grouped(
+  y = standata_hier_long$complaints[select_vec],
+  yrep = y_rep[, select_vec],
+  group = standata_hier_long$mo_idx[select_vec],
+  stat = 'mean'
+)
+```
+
+As we can see, our monthly random intercept has captured a monthly pattern
+across all the buildings. We can also compare the prior and posterior for the
+autoregressive parameter to see how much we've learned.
+
+```{r plot-rho-prior-vs-posterior}
+rho_draws <- cbind(
+  prior = 2 * rbeta(4000, 10, 5) - 1,
+  posterior = as.vector(fit_hier_NB_mos$draws("rho", format = "matrix"))
+)
+mcmc_hist(
+  rho_draws,
+  freq = FALSE,
+  binwidth = 0.025,
+  facet_args = list(nrow = 2)
+) + xlim(-1, 1)
+```
+
+We'll also make the intervals plot that shows the posterior predictive
+distribution of complaints for different numbers of traps:
+
+
+```{r fit_hier_NB_mos-ppc_intervals}
+ppc_intervals(
+  y = standata_hier_long$complaints,
+  yrep = y_rep,
+  x = standata_hier_long$traps + rnorm(standata_hier_long$N, 0, 0.2)
+) +
+  labs(
+    x = "Number of traps (jittered)", 
+    y = "Predicted number of complaints"
+  )
+```
+
+It looks as if our model finally generates a reasonable posterior predictive
+distribution for all numbers of traps, and appropriately captures the tails of the
+data generating process.
+
+
+## Using our model: loss forecasts for decision making
+
+Our model seems to be fitting well, so now we will go ahead and use the model to
+help us make a decision about how many traps to put in our buildings.
+This decision will balance the benefit of using more traps (fewer complaints
+and calls to the exterminator) with the cost of setting up and maintaining the
+traps.
+
+We will generate forecast curves for the buildings for a period of 12 months,
+which will let us quantify our uncertainty about the revenue (in
+this case really just cost) projected for any hypothetical number of traps we
+could use in each building. That is, we will ask the question: over the
+next year, how much would it cost each building if they used 0 traps, or
+1 trap, or 2 traps, etc.?
+
+To do this we first need to predict the number of complaints over 12 months
+in each building for each hypothetical number of traps (we'll limit it to a
+max of 20 traps).
+
+```{r comp_forecast}
+comp_forecast <- cmdstan_model("stan_programs/hier_NB_regression_ncp_slopes_mos_predict.stan")
+```
+
+```{r fit_forecast}
+standata_hier_long$M_forward <- 12
+fit_forecast <- comp_forecast$sample(
+  data = standata_hier_long,
+  refresh = 0,
+  chains = 4, 
+  parallel_chains = 4,
+  adapt_delta = 0.9
+)
+```
+
+```{r extract-predictions}
+# use new draws_rvars format in posterior package
+# get draws of predicted complaints
+draws <- as_draws_rvars(fit_forecast$draws("y_pred"))
+predicted_complaints <- draws$y_pred
+
+# draws (hidden) x buildings x number of traps
+dim(predicted_complaints)
+```
+
+### Factoring in the various costs for the client
+
+#### Cost of exterminator
+
+The client has a policy that for every 10 complaints, they'll call an exterminator costing them \$100, so that'll amount to \$10 per complaint:
+
+```{r exterminator-cost}
+total_losses <- -10 * predicted_complaints
+```
+
+
+#### Cost of materials and labor for maintaining traps
+
+Another key input to our analysis will be the cost of installing traps
+(really bait stations). We're simulating the number of complaints we receive over the course of a year, so we
+need to understand the cost associated with maintaining each bait station over
+the course of a year. There's the cost attributed to the raw bait station, which
+is the plastic housing and the bait material, a peanut-buttery substance that's
+injected with insecticide. The cost of maintaining one bait station for a year
+plus monthly replenishment of the bait material is about \$20.
+
+```{r materials-cost-formulation}
+# materials cost
+N_traps <- 20
+costs <- 20 * (0:N_traps)
+```
+
+We'll also need labor for maintaining the bait stations, which need to be
+serviced every two months. If there are fewer than five traps, our in-house
+maintenance staff can manage the stations (about one hour of work every two
+months at \$20/hour), but above five traps we need to hire outside pest control
+to help out. They're a bit more expensive, so we've put their cost at \$30 /
+hour. Each five traps should require an extra person-hour of work, so that's
+factored in as well. The marginal person-person hours above five traps are at
+the higher pest-control-labor rate.
+
+```{r labor-cost-formulation}
+# labor costs
+N_months_forward <- 12
+N_months_labor <- N_months_forward / 2
+hourly_rate_low <- 20
+hourly_rate_high <- 30
+costs <- costs +
+  (0:N_traps < 5 & 0:N_traps > 0) * (N_months_labor * hourly_rate_low) +
+  (0:N_traps >= 5 & 0:N_traps < 10) * (N_months_labor * (hourly_rate_low + 1 * hourly_rate_high)) +
+  (0:N_traps >= 10 & 0:N_traps < 15) * (N_months_labor * (hourly_rate_low + 2 * hourly_rate_high)) +
+  (0:N_traps >= 15) * (N_months_labor * (hourly_rate_low + 3 * hourly_rate_high))
+```
+
+```{r}
+print(costs)
+```
+
+We can now include the materials and labor into the total revenue lost by 
+subtracting `costs`:
+
+```{r total_losses}
+total_losses <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
+```
+
+### Plotting forecasts
+
+We can now plot curves with number of traps on the x-axis and revenue
+forecasts and uncertainty intervals on the y-axis.
+
+```{r revenue-loss-curves, fig.width = 8, fig.height = 8}
+# calculate medians and central intervals (for example 90% intervals)
+median_loss <- t(apply(total_losses, c(1, 2), median))
+lower_loss <- t(apply(total_losses, c(1, 2), quantile, 0.05))
+upper_loss <- t(apply(total_losses, c(1, 2), quantile, 0.95))
+
+buildings <- seq(1, ncol(median_loss))
+traps <- seq(0, nrow(median_loss) - 1)
+
+loss_df <-
+  data.frame(
+    loss = as.vector(median_loss),
+    lower = as.vector(lower_loss),
+    upper = as.vector(upper_loss),
+    traps = rep(traps, times = max(buildings)),
+    building = rep(buildings, each = max(traps) + 1)
+  )
+
+ggplot(data = loss_df, aes(x = traps, y = loss)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), fill = "skyblue") +
+  geom_line() +
+  labs(x = "Number of traps", y = "Revenue") +
+  facet_wrap(~ building, scales = "fixed", ncol = 3)
+```
+
+
+<br>
+
+Left as an exercise (unless we have time):
+
+* How would we make a forecast for a new building?
+
+* If we wanted to maximize expected revenue (in this case it will be negative
+since we're just dealing with costs/losses), we can take expectations at each station count for each building, and
+choose the trap number that maximizes expected revenue for that building. This will be called a
+maximum revenue strategy. How can we generate the distribution of portfolio
+revenue (i.e. the sum of revenue across all the buildings) under the maximum
+revenue strategy from the predictions we already have?
+
+
+
+## Gaussian process instead of AR(1)
+
+We won't cover this in person, but for anyone interested in Gaussian processes (GP)
+this section explains how to implement a GP as an alternative to the AR(1). 
+
+### Joint density for AR(1) process
+
+We can derive the joint distribution for the AR(1) process before we move to the
+Gaussian process (GP) which will give us a little more insight into what a GP
+is. Remember that we've specified the AR(1) prior as:
+
+$$
+\begin{aligned}
+\texttt{mo}_1 & \sim \text{Normal}\left(0, \frac{\sigma_\texttt{mo}}{\sqrt{1 - \rho^2}}\right) \\
+\texttt{mo}_t & \sim \text{Normal}\left(\rho \, \texttt{mo}_{t-1}, \sigma_\texttt{mo}\right) \forall t > 1
+\end{aligned}
+$$
+Rewriting our process in terms of the errors will make the derivation
+of the joint distribution clearer
+
+$$
+\begin{aligned}
+\texttt{mo}_1 & \sim \text{Normal}\left(0, \frac{\sigma_\texttt{mo}}{\sqrt{1 - \rho^2}}\right) \\
+\texttt{mo}_t & = \rho \, \texttt{mo}_{t-1} + \sigma_\texttt{mo}\epsilon_t  \\
+\epsilon_t & \sim \text{Normal}\left(0, 1\right)
+\end{aligned}
+$$
+
+Given that our first term $\texttt{mo}_1$ is normally distributed, and
+subsequent terms are sums of normal random variables, this means that jointly
+the vector `mo` is multivariate normal.
+
+More formally, if we have a vector $x \in \mathbb{R}^M$ which is
+multivariate normal, $x \sim \text{MultiNormal}(0, \Sigma)$, and we left-multiply $x$
+by a nonsingular matrix $L \in \mathbb{R}^{M\times M}$, then
+$y = Lx \sim \text{MultiNormal}(0, L\Sigma L^T)$.
+We can use this fact to show that our vector `mo` is jointly multivariate
+normal.
+
+Just as before with the noncentered parameterization, we'll take a vector
+$\texttt{mo_raw} \in \mathbb{R}^M$ (in which each element is univariate
+$\text{Normal}(0,1)$) and transform it into `mo`. But instead of doing this with
+scalar transformations like we did previously
+(e.g., in the section __Time varying effects and structured priors__)
+we will now do it with linear algebra operations.
+
+The trick is that by specifying each element of $\texttt{mo_raw}$ to be distributed $\text{Normal}(0,1)$ we are implicitly defining
+$\texttt{mo_raw} \sim \text{MultiNormal}(0, I_M)$, where $I_M$ is the
+$M \times M$ identity matrix. Then we do a linear transformation using a matrix
+$L$ and assign the result to `mo`, i.e., $\texttt{mo} = L\times\texttt{mo_raw}$.
+This gives us $\texttt{mo} \sim \text{MultiNormal}(0, LI_M L^T)$ and
+$LI_M L^T = LL^T$.
+
+Consider the case where we have three elements in `mo` and we want to figure
+out the form for $L$.
+
+The first element of `mo` is fairly straightforward, because it mirrors our
+earlier parameterization of the AR(1) prior. The only difference is that we're
+explicitly adding the last two terms of `mo_raw` into the equation so we can use
+matrix algebra for our transformation.
+$$
+\texttt{mo}_1 = \frac{\sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1 + 0 \times \texttt{mo_raw}_2 + 0 \times \texttt{mo_raw}_3\\
+$$
+The second element is a bit more complicated:
+
+$$
+\begin{aligned}
+\texttt{mo}_2 & = \rho \texttt{mo}_1 + \sigma_{\texttt{mo}}\,\texttt{mo_raw}_2 + 0 \times \texttt{mo_raw}_3  \\
+ & = \rho \left(\frac{\sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1\right) + \sigma_{\texttt{mo}}\,\texttt{mo_raw}_2 + 0 \times \texttt{mo_raw}_3  \\[5pt]
+ & = \frac{\rho \sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1 + \sigma_{\texttt{mo}}\,\texttt{mo_raw}_2 + 0 \times \texttt{mo_raw}_3  \\
+\end{aligned}
+$$
+
+While the third element will involve all three terms
+$$
+\begin{aligned}
+\texttt{mo}_3 & = \rho \, \texttt{mo}_2 + \sigma_{\texttt{mo}}\,\texttt{mo_raw}_3 \\
+ & = \rho \left(\frac{\rho \sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1 + \sigma_{\texttt{mo}}\,\texttt{mo_raw}_2\right) + \sigma_{\texttt{mo}} \texttt{mo_raw}_3  \\[5pt]
+& = \frac{\rho^2 \sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1 + \rho \, \sigma_{\texttt{mo}}\,\texttt{mo_raw}_2 +  \sigma_{\texttt{mo}}\,\texttt{mo_raw}_3  \\
+\end{aligned}
+$$
+
+Writing this all together:
+
+$$
+\begin{aligned}
+\texttt{mo}_1 & = \frac{\sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1 + 0 \times \texttt{mo_raw}_2 + 0 \times \texttt{mo_raw}_3\\[3pt]
+\texttt{mo}_2 & = \frac{\rho \sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1 + \sigma_{\texttt{mo}}\,\texttt{mo_raw}_2 + 0 \times \texttt{mo_raw}_3  \\[3pt]
+\texttt{mo}_3 & = \frac{\rho^2 \sigma_{\texttt{mo}}}{\sqrt{1 - \rho^2}} \times \texttt{mo_raw}_1 + \rho \, \sigma_{\texttt{mo}}\,\texttt{mo_raw}_2 +  \sigma_{\texttt{mo}}\,\texttt{mo_raw}_3  \\
+\end{aligned}
+$$
+Separating this into a matrix of coefficients $L$ and the vector `mo_raw`:
+
+$$
+\texttt{mo} = \begin{bmatrix} \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & 0 & 0 \\
+              \rho \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & \sigma_\texttt{mo} & 0 \\
+              \rho^2 \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & \rho \,\sigma_\texttt{mo}  & \sigma_\texttt{mo}
+              \end{bmatrix} \times \texttt{mo_raw}
+$$
+
+If we multiply $L$ on the right by its transpose $L^T$, we'll get expressions for the covariance matrix of our multivariate random vector `mo`:
+
+$$
+\begin{bmatrix} \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & 0 & 0 \\
+\rho \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & \sigma_\texttt{mo} & 0 \\
+\rho^2 \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & \rho \,\sigma_\texttt{mo}  & \sigma_\texttt{mo}
+\end{bmatrix} \times
+\begin{bmatrix} \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & \rho \sigma_\texttt{mo} / \sqrt{1 - \rho^2} & \rho^2 \sigma_\texttt{mo} / \sqrt{1 - \rho^2} \\
+0 & \sigma_\texttt{mo} & \rho \,\sigma_\texttt{mo} \\
+0 & 0  & \sigma_\texttt{mo}
+\end{bmatrix}
+$$
+
+which results in:
+
+$$
+\begin{bmatrix} \sigma^2_\texttt{mo} / (1 - \rho^2) & \rho \, \sigma^2_\texttt{mo} / (1 - \rho^2) &  \rho^2 \, \sigma^2_\texttt{mo} / (1 - \rho^2)\\
+\rho \, \sigma^2_\texttt{mo} / (1 - \rho^2)  & \sigma^2_\texttt{mo} / (1 - \rho^2)  & \rho \, \sigma^2_\texttt{mo} / (1 - \rho^2) \\
+\rho^2 \sigma^2_\texttt{mo} / (1 - \rho^2) & \rho \, \sigma^2_\texttt{mo} / (1 - \rho^2) & \sigma^2_\texttt{mo} / (1 - \rho^2)
+\end{bmatrix}
+$$
+We can simplify this result by dividing the matrix by
+$\sigma^2_\texttt{mo} / (1 - \rho^2)$ to get
+
+$$
+\begin{bmatrix} 1 & \rho  &  \rho^2 \\
+\rho  & 1  & \rho  \\
+\rho^2 & \rho & 1
+\end{bmatrix}
+$$
+
+This should generalize to higher dimensions pretty easily.
+
+We can replace the Stan code defining `mo` in
+`stan_programs/hier_NB_regression_ncp_slopes_mos.stan` with the following:
+
+```
+vector[M] mo;
+{
+  matrix[M,M] A = rep_matrix(0, M, M);
+  A[1,1] = sigma_mo / sqrt(1 - rho^2);
+  for (m in 2:M) {
+    A[m,1] = rho^(m-1) * sigma_mo / sqrt(1 - rho^2);
+  }
+  for (m in 2:M) {
+    A[m,m] = sigma_mo;
+    for (i in (m + 1):M) {
+      A[i,m] = rho^(i-m) * sigma_mo;
+    }
+  }
+  mo = A * mo_raw;
+}
+```
+
+### Cholesky decomposition
+
+If we only knew the covariance matrix of our process, say a matrix called
+$\Sigma$, and we had a way of decomposing $\Sigma$ into $L L^T$ we wouldn't need
+to write out the equation for the vector. Luckily, there is a matrix
+decomposition called the __Cholesky decomposition__ that does just that. The
+Stan function for the composition is called `cholesky_decompose`. Instead of
+writing out the explicit equation we can just do the following
+
+```
+vector[M] mo;
+{
+  mo = cholesky_decompose(Sigma) * mo_raw;
+}
+```
+provided we've defined `Sigma` appropriately elsewhere in the `transformed
+parameters` block. Note that the matrix $L$ is lower-triangular (i.e. all
+elements in the upper right triangle of the matrix are zero).
+
+We've already derived the covariance matrix `Sigma` for the three-dimensional
+AR(1) process above by explicitly calculating $L L^T$, but we can do so using
+the rules of covariance and the way our process is defined. We already know that
+each element of $\texttt{mo}_t$ has marginal variance
+$\sigma^2_\texttt{mo} / (1- \rho^2)$, but we don't know the covariance of
+$\texttt{mo}_t$ and $\texttt{mo}_{t+h}$.
+We can do so recursively. First we derive the covariance
+for two elements of $\texttt{mo}_t$ separated by one month:
+
+$$
+\text{Cov}(\texttt{mo}_{t+1},\texttt{mo}_{t}) = \text{Cov}(\rho \, \texttt{mo}_{t} + \sigma_\texttt{mo}\epsilon_{t+1},\texttt{mo}_{t}) \\
+\text{Cov}(\texttt{mo}_{t+1},\texttt{mo}_{t}) = \rho \text{Cov}(\texttt{mo}_{t},\texttt{mo}_{t}) + \sigma_\texttt{mo}\text{Cov}(\epsilon_{t+1},\texttt{mo}_{t}) \\
+\text{Cov}(\texttt{mo}_{t+1},\texttt{mo}_{t}) = \rho \text{Var}(\texttt{mo}_t) + 0
+$$
+
+Then we define the covariance for $\text{Cov}(\texttt{mo}_{t+h},\texttt{mo}_{t})$ in terms of $\text{Cov}(\texttt{mo}_{t+h-1},\texttt{mo}_{t})$
+
+$$
+\text{Cov}(\texttt{mo}_{t+h},\texttt{mo}_{t}) = \text{Cov}(\rho \, \texttt{mo}_{t+h-1} + \sigma_\texttt{mo}\epsilon_{t+h},\texttt{mo}_{t}) \\
+\text{Cov}(\texttt{mo}_{t+h},\texttt{mo}_{t}) = \rho \, \text{Cov}(\texttt{mo}_{t+h-1},\texttt{mo}_{t}) \\
+$$
+Which we can use to recursively get at the covariance we need:
+
+$$
+\text{Cov}(\texttt{mo}_{t+h},\texttt{mo}_{t}) = \rho \, \text{Cov}(\texttt{mo}_{t+h-1},\texttt{mo}_{t}) \\
+\text{Cov}(\texttt{mo}_{t+h},\texttt{mo}_{t}) = \rho \,( \rho \, \text{Cov}(\texttt{mo}_{t+h-2},\texttt{mo}_{t}) )\\
+\dots \\
+\text{Cov}(\texttt{mo}_{t+h},\texttt{mo}_{t}) = \rho^h \, \text{Cov}(\texttt{mo}_{t},\texttt{mo}_{t}) \\
+\text{Cov}(\texttt{mo}_{t+h},\texttt{mo}_{t}) = \rho^h \, \sigma_\texttt{mo}^2/(1 - \rho^2) \\
+$$
+
+One way to write this in Stan code is:
+
+```
+vector[M] mo;
+{
+  matrix[M,M] Sigma;
+  for (m in 1:M) {
+    Sigma[m,m] = 1.0;
+    for (i in (m + 1):M) {
+      Sigma[i,m] = rho^(i - m);
+      Sigma[m,i] = Sigma[i,m];
+    }
+  }
+  Sigma = Sigma * sigma_mo^2 / (1 - rho^2);
+  mo = cholesky_decompose(Sigma) * mo_raw;
+}
+```
+
+### Extension to Gaussian processes
+
+The prior we defined for `mo` is strictly speaking a Gaussian process. It is a
+stochastic process that is distributed as jointly multivariate normal for any
+finite value of $M$. Formally, we could write the above prior for `mo` like so:
+
+$$
+\begin{aligned}
+  \sigma_\texttt{mo} & \sim \text{Normal}(0, 1) \\
+  \rho & \sim \text{GenBeta}(-1,1,10, 5) \\
+  \texttt{mo}_t & \sim \text{GP}\left( 0,
+  K(t | \sigma_\texttt{mo},\rho) \right) \\
+\end{aligned}
+$$
+The notation $K(t | \sigma_\texttt{mo},\rho)$ defines the covariance matrix of
+the process over the domain $t$, which is months.
+
+In other words:
+
+$$
+\text{Cov}(\texttt{mo}_t,\texttt{mo}_{t+h}) = k(t, t+h | \sigma_\texttt{mo}, \rho)
+$$
+
+We've already derived the covariance for our process.  What if we want to use a
+different definition of `Sigma`?
+
+As the above example shows defining a proper covariance matrix will yield a
+proper multivariate normal prior on a parameter. We need a way of defining a
+proper covariance matrix. These are symmetric positive definite matrices. It
+turns out there is a class of functions that define proper covariance matrices,
+called __kernel functions__. These functions are applied elementwise to construct a
+covariance matrix, $K$:
+
+$$
+K_{[t,t+h]} = k(t, t+h | \theta)
+$$
+where $\theta$ are the hyperparameters that define the behavior of covariance matrix.
+
+One such function is called the __exponentiated quadratic function__, and it happens
+to be implemented in Stan as `cov_exp_quad`. The function is defined as:
+
+$$
+\begin{aligned}
+  k(t, t+h | \theta) & = \alpha^2  \exp \left( - \dfrac{1}{2\ell^2} ((t+h) - t)^2 \right) \\
+  & = \alpha^2  \exp \left( - \dfrac{h^2}{2\ell^2} \right)
+\end{aligned}
+$$
+
+The exponentiated quadratic kernel has two components to theta, $\alpha$, the
+marginal standard deviation of the stochastic process $f$, and $\ell$, the
+process length-scale.
+
+The length-scale defines how quickly the covariance decays between time points,
+with large values of $\ell$ yielding a covariance that decays slowly, and with
+small values of $\ell$ yielding a covariance that decays rapidly. It can be seen
+interpreted as a measure of how nonlinear the `mo` process is in time.
+
+The marginal standard deviation defines how large the fluctuations are on the
+output side, which in our case is the number of roach complaints per month
+across all buildings. It can be seen as a scale parameter akin to the scale
+parameter for our building-level hierarchical intercept, though it now defines
+the scale of the monthly deviations.
+
+This kernel's defining quality is its smoothness; the function is infinitely
+differentiable. That will present problems for our example, but if we add some
+noise the diagonal of our covariance matrix, the model will fit well.
+
+$$
+k(t, t+h | \theta) = \alpha^2  \exp \left( - \dfrac{h^2}{2\ell^2} \right) + \text{if } h = 0, \, \sigma^2_\texttt{noise} \text{ else } 0
+$$
+
+### Compiling the GP model
+
+```{r comp_hier_NB_gp}
+comp_hier_NB_gp <- cmdstan_model("stan_programs/hier_NB_regression_ncp_slopes_mos_gp.stan")
+```
+
+### Fitting the GP model to data
+
+```{r fit_hier_NB_gp, results="hold"}
+fit_hier_NB_gp <- comp_hier_NB_gp$sample(
+  data = standata_hier_long,
+  refresh = 1000,
+  chains = 4,
+  parallel_chains = 4,
+  adapt_delta = 0.9
+)
+fit_hier_NB_gp$summary()
+```
+
+### Examining the fit
+
+Let's look at the prior vs. posterior for the GP length scale parameter:
+
+```{r plot-length-scale-prior-vs-posterior}
+length_scale_draws <- cbind(
+  prior = rgamma(4000, 10, 2),
+  posterior = as.vector(fit_hier_NB_gp$draws('gp_len', format = "matrix"))
+)
+mcmc_areas(length_scale_draws)
+```
+
+From the plot above it only looks like we learned a small amount, however we can
+see a bigger difference between the prior and posterior if we consider how much
+we learned about the ratio of `sigma_gp` to the length scale `gp_len`:
+
+```{r plot-noise-ratio-prior-vs-posterior}
+sigma_gp <- fit_hier_NB_gp$draws("sigma_gp", format = "matrix")
+gp_len <- fit_hier_NB_gp$draws("gp_len", format = "matrix")
+
+noise_to_length_scale_ratio_draws <- cbind(
+  prior = abs(rnorm(4000)) / rgamma(4000, 10, 2),
+  posterior = as.vector(sigma_gp / gp_len)
+)
+mcmc_areas(noise_to_length_scale_ratio_draws)
+```
+
+This is a classic problem with Gaussian processes. Marginally, the length-scale
+parameter isn't very well-identified by the data, but jointly the length-scale and
+the marginal standard deviation are well-identified.
+
+And let's compare the estimates for the time varying parameters between the
+AR(1) and GP. In this case the posterior mean of the time trend is essentially
+the same for the AR(1) and GP priors but the 50% uncertainty intervals are
+narrower for the AR(1):
+
+```{r plot-ar-vs-gp, message=FALSE, warning=FALSE}
+mo_ar_intervals <- mcmc_intervals_data(fit_hier_NB_mos$draws("mo"), prob = 0.5)
+mo_gp_intervals <- mcmc_intervals_data(fit_hier_NB_gp$draws("gp"), prob = 0.5)
+plot_data <- bind_rows(mo_ar_intervals, mo_gp_intervals)
+plot_data$prior <- factor(rep(c("AR1", "GP"), each = 36), levels = c("GP", "AR1"))
+plot_data$time <- rep(1:36, times = 2)
+
+ggplot(plot_data, aes(x = time, y = m, ymin = l, ymax = h, fill = prior)) +
+  geom_ribbon(alpha = 2/3)
+```
+
+The way we coded the GP also lets us plot a decomposition of the GP into a
+monthly noise component (`mo_noise` in the Stan code) and the underlying
+smoothly varying trend (`gp_exp_quad` in the Stan code):
+
+```{r plot-gp-decomposition, message=FALSE, warning=FALSE}
+# visualizing 50% intervals
+mo_noise_intervals <- mcmc_intervals_data(fit_hier_NB_gp$draws("mo_noise"), prob = 0.5)
+gp_exp_quad_intervals <- mcmc_intervals_data(fit_hier_NB_gp$draws("gp_exp_quad"), prob = 0.5)
+
+plot_data <- bind_rows(mo_noise_intervals, gp_exp_quad_intervals)
+plot_data$time <- rep(1:36, times = 2)
+plot_data$term <- factor(rep(c("Monthly Noise", "Smooth Trend"), each = 36),
+                         levels = c("Smooth Trend", "Monthly Noise"))
+
+ggplot(plot_data, aes(x = time, y = m, ymin = l, ymax = h, fill = term)) +
+  geom_ribbon(alpha = 0.5) +
+  geom_line(aes(color = term), size = 0.5) +
+  ylab(NULL)
+```
