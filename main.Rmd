@@ -815,11 +815,17 @@ fit_hier_NB <-
   )
 ```
 
-### Diagnostics
-
 We get a bunch of warnings from Stan about divergent transitions, which is
 an indication that there may be regions of the posterior that have not been
 explored by the Markov chains.
+
+In order to figure out what this means and what to do about it we'll pause 
+here to discuss MCMC and Stan's implementation in particular. 
+To do that we'll use this interactive MCMC demo: 
+
+* https://chi-feng.github.io/mcmc-demo/app.html
+
+### Diagnostics
 
 Divergences are discussed in more detail in the case study
 [Diagnosing Biased Inference with Divergences](https://mc-stan.org/users/documentation/case-studies/divergences_and_bias.html),
