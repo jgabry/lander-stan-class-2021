@@ -365,7 +365,7 @@ And compare them to draws from the prior:
 ```{r compare-prior-posterior}
 alpha_prior_post <- cbind(
   alpha_prior = rnorm(4000, log(7), 1),
-  alpha_posterior = draws[, "alpha"]
+  alpha_posterior = as.vector(draws[, "alpha"])
 )
 mcmc_hist(
   alpha_prior_post,
@@ -376,7 +376,7 @@ mcmc_hist(
 
 beta_prior_post <- cbind(
   beta_prior = rnorm(4000, -0.25, 0.5),
-  beta_posterior = draws[, "beta"]
+  beta_posterior = as.vector(draws[, "beta"])
 )
 mcmc_hist(
   beta_prior_post,

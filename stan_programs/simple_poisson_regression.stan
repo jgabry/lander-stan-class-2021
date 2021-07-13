@@ -21,5 +21,7 @@ model {
   // in R: dnorm(beta, mean = -0.25, sd = 0.5, log=TRUE)
 }
 generated quantities {
+  // calculate predictions/replications y_rep
+  // can vectorize it or do it in a loop
   
 }

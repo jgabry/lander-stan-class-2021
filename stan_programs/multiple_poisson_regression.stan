@@ -25,8 +25,5 @@ model {
   // give beta_super a normal distribution with mean = -0.5 and sd = 1
 }
 generated quantities {
-  array[N] int y_rep;
-  for (n in 1:N) {
-    y_rep[n] = poisson_log_rng(eta[n]);
-  }
+  array[N] int y_rep poisson_log_rng(eta);
 }
