@@ -1482,17 +1482,17 @@ We can now plot curves with number of traps on the x-axis and revenue
 forecasts and uncertainty intervals on the y-axis.
 
 ```{r revenue-loss-curves, fig.width = 8, fig.height = 8}
-# calculate medians and central intervals (for example 90% intervals)
-median_loss <- t(apply(total_losses, c(1, 2), median))
+# calculate means and central intervals (for example 90% intervals)
+mean_loss <- t(apply(total_losses, c(1, 2), mean))
 lower_loss <- t(apply(total_losses, c(1, 2), quantile, 0.05))
 upper_loss <- t(apply(total_losses, c(1, 2), quantile, 0.95))
 
-buildings <- seq(1, ncol(median_loss))
-traps <- seq(0, nrow(median_loss) - 1)
+buildings <- seq(1, ncol(mean_loss))
+traps <- seq(0, nrow(mean_loss) - 1)
 
 loss_df <-
   data.frame(
-    loss = as.vector(median_loss),
+    loss = as.vector(mean_loss),
     lower = as.vector(lower_loss),
     upper = as.vector(upper_loss),
     traps = rep(traps, times = max(buildings)),
@@ -1505,7 +1505,6 @@ ggplot(data = loss_df, aes(x = traps, y = loss)) +
   labs(x = "Number of traps", y = "Revenue") +
   facet_wrap(~ building, scales = "fixed", ncol = 3)
 ```
-
 
 <br>
 
