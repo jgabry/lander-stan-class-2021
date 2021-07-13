@@ -529,11 +529,13 @@ comp_multi_pois <- cmdstan_model("stan_programs/multiple_poisson_regression.stan
 ### Fit the Poisson multiple regression
 
 ```{r fit_multi_pois}
-fit_multi_pois <- comp_multi_pois$sample(data = standata_simple,
-                                         refresh = 0) # turn off printed progress updates
+fit_multi_pois <- comp_multi_pois$sample(
+  data = standata_simple,
+  refresh = 0 # turn off printed progress updates
+) 
 ```
 ```{r fit_multi_pois-summary}
-fit_multi_pois$summary()
+fit_multi_pois$summary(variables = c("alpha", "beta", "beta_super"))
 ```
 
 
@@ -1095,7 +1097,8 @@ fit_hier_NB_slopes <-
     data = standata_hier_long,
     chains = 4,
     parallel_chains = 4,
-    adapt_delta = 0.95
+    adapt_delta = 0.95,
+    refresh = 200
   )
 ```
 
@@ -1270,12 +1273,13 @@ fit_hier_NB_mos <-
     data = standata_hier_long,
     chains = 4,
     parallel_chains = 4,
-    adapt_delta = 0.95
+    adapt_delta = 0.95, 
+    refresh = 200
   )
 ```
 
 ```{r fit_hier_NB_mos-summary}
-fit_hier_NB_mos$summary()
+fit_hier_NB_mos$summary(variables = c("sigma_mo", "mo"))
 ```
 
 In the interest of brevity, we won't go on expanding the model, though we
@@ -1361,14 +1365,18 @@ in each building for each hypothetical number of traps (we'll limit it to a
 max of 20 traps).
 
 ```{r comp_forecast}
+# this is the same model as the previous one just with extra code to
+# do the future forecasts
 comp_forecast <- cmdstan_model("stan_programs/hier_NB_regression_ncp_slopes_mos_predict.stan")
 ```
 
 ```{r fit_forecast}
+# add number of months to predict to the data list
 standata_hier_long$M_forward <- 12
+
 fit_forecast <- comp_forecast$sample(
   data = standata_hier_long,
-  refresh = 0,
+  refresh = 500,
   chains = 4, 
   parallel_chains = 4,
   adapt_delta = 0.9
@@ -1377,6 +1385,8 @@ fit_forecast <- comp_forecast$sample(
 
 ```{r extract-predictions}
 # use new draws_rvars format in posterior package
+# http://mc-stan.org/posterior/articles/rvar.html
+
 # get draws of predicted complaints
 draws <- as_draws_rvars(fit_forecast$draws("y_pred"))
 predicted_complaints <- draws$y_pred
@@ -1389,9 +1399,12 @@ dim(predicted_complaints)
 
 #### Cost of exterminator
 
-The client has a policy that for every 10 complaints, they'll call an exterminator costing them \$100, so that'll amount to \$10 per complaint:
+The client has a policy that for every 10 complaints, they'll call an exterminator costing them \$100, so that amounts to \$10 per complaint:
 
 ```{r exterminator-cost}
+# this is a bit of an approximation because complaints don't have to 
+# be a multiple of 10, but this is close enough. we could do a little more
+# work to get it exact if we want
 total_losses <- -10 * predicted_complaints
 ```
 
@@ -1435,11 +1448,11 @@ costs <- costs +
 ```
 
 ```{r}
-print(costs)
+print(cbind(traps = 0:20, cost = costs))
 ```
 
 We can now include the materials and labor into the total revenue lost by 
-subtracting `costs`:
+subtracting `costs` from the `total_losses` we already have:
 
 ```{r total_losses}
 total_losses <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
@@ -1494,7 +1507,7 @@ revenue strategy from the predictions we already have?
 ## Gaussian process instead of AR(1)
 
 We won't cover this in person, but for anyone interested in Gaussian processes (GP)
-this section explains how to implement a GP as an alternative to the AR(1). 
+this section explains how to implement a GP as an alternative to the AR(1). This is pretty math heavy and just intended to give people interested in GPs an example of how to do it. If you're not interested in GPs feel free to ignore this. 
 
 ### Joint density for AR(1) process
 

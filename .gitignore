@@ -1,3 +1,15 @@
+*.key
+stan_programs/hier_NB_regression
+stan_programs/hier_NB_regression_ncp
+stan_programs/hier_NB_regression_ncp_slopes
+stan_programs/hier_NB_regression_ncp_slopes_mos
+stan_programs/hier_NB_regression_ncp_slopes_mos_gp
+stan_programs/hier_NB_regression_ncp_slopes_mos_predict
+stan_programs/multiple_NB_regression
+stan_programs/multiple_poisson_regression
+stan_programs/simple_poisson_regression
+
+### gitignore template for R
 # History files
 .Rhistory
 .Rapp.history
@@ -34,4 +46,4 @@ vignettes/*.pdf
 
 # Shiny token, see https://shiny.rstudio.com/articles/shinyapps.html
 rsconnect/
-*.key
+
