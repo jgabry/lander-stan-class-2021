@@ -78,7 +78,7 @@ cockroach levels in the building
 * At the end of the month, the manager records
 the total number of cockroach complaints in that building.
 * The manager would like to determine the optimal number of bait stations (we'll call them $\textrm{traps}$) that
-balances the lost revenue ($R$) that complaints ($\textrm{complaints}$) generate
+balances the losses ($L$) that complaints ($\textrm{complaints}$) generate
 with the all-in cost of maintaining the traps ($\textrm{C}$).
 
 Fortunately, Bayesian data analysis provides a coherent framework for us to tackle this problem.
@@ -86,7 +86,12 @@ Fortunately, Bayesian data analysis provides a coherent framework for us to tack
 Formally, we are interested in finding
 
 $$
-\arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[R(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
+\arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[-L(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
+$$
+Note that this also equals:
+
+$$
+\arg\min_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[L(\textrm{complaints}(\textrm{traps})) + \textrm{C}(\textrm{traps})]
 $$
 
 The property manager would also, if possible, like to learn how these results
@@ -168,9 +173,13 @@ number of complaints over a month should be either zero or an integer. The
 property manager tells us that it is possible but unlikely that number of
 complaints in a given month is zero. Occasionally there are a very large number
 of complaints in a single month. A common way of modeling this sort of skewed,
-single bounded count data is as a Poisson random variable. One concern about
-modeling the outcome variable as Poisson is that the data may be
-over-dispersed, but we'll start with the Poisson model and then check
+single bounded count data is as a Poisson random variable. 
+
+A note of caution about Poisson random variables before we proceed: 
+Poisson random variables exhibit the distinctive characteristic that the variance 
+equals the mean. In real-world count data, the variance often exceeds the mean,
+or, equivalently, the data are said to be ``over-dispersed''.
+For now, however, we'll start with the Poisson model and then check
 whether over-dispersion is a problem by comparing our model's predictions
 to the data.
 
@@ -178,7 +187,7 @@ to the data.
 
 Given that we have chosen a Poisson regression, we define the likelihood to be
 the Poisson probability mass function over the number bait stations placed in
-the building, denoted below as `traps`. This model assumes that the mean and
+the building, denoted below as `traps`. As we said above, this model implies that the mean and
 variance of the outcome variable `complaints` (number of complaints) is the
 same. We'll investigate whether this is a good assumption after we fit the
 model.
