@@ -77,11 +77,13 @@ bait stations throughout the building, without knowledge of the current
 cockroach levels in the building
 * At the end of the month, the manager records
 the total number of cockroach complaints in that building.
-* The manager would like to determine the optimal number of bait stations (we'll call them $\textrm{traps}$) that
-balances the losses ($L$) that complaints ($\textrm{complaints}$) generate
-with the all-in cost of maintaining the traps ($\textrm{C}$).
+* The manager would like to determine the optimal number of bait stations (we'll
+call them $\textrm{traps}$) that balances the losses ($L$) that complaints
+($\textrm{complaints}$) generate with the all-in cost of maintaining the traps
+($\textrm{C}$).
 
-Fortunately, Bayesian data analysis provides a coherent framework for us to tackle this problem.
+Fortunately, Bayesian data analysis provides a coherent framework for us to
+tackle this problem.
 
 Formally, we are interested in finding
 
@@ -94,8 +96,9 @@ Note that this also equals:
 $$
 \arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[-L(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
 $$
-We'll use this formulation of the problem because it accords with other texts on 
-decision theory (see, for example, _Applied Statistical Decision Theory_ by Raiffa, and Schlaifer).
+We'll use this formulation of the problem because it accords with other texts on
+decision theory (see, for example, _Applied Statistical Decision Theory_ by
+Raiffa and Schlaifer).
 
 The property manager would also, if possible, like to learn how these results
 generalize to buildings they haven't treated so they can understand the
@@ -190,10 +193,10 @@ to the data.
 
 Given that we have chosen a Poisson regression, we define the likelihood to be
 the Poisson probability mass function over the number bait stations placed in
-the building, denoted below as `traps`. As we said above, this model implies that the mean and
-variance of the outcome variable `complaints` (number of complaints) is the
-same. We'll investigate whether this is a good assumption after we fit the
-model.
+the building, denoted below as `traps`. As we said above, this model implies
+that the conditional mean of the outcome variable `complaints` (number of
+complaints) is the same as its conditional variance ($E[Y|X] = Var[Y|X]$). 
+We'll investigate whether this is a good assumption after we fit the model.
 
 For building $b = 1,\dots,10$ at time (month) $t = 1,\dots,12$, we have
 
@@ -1513,18 +1516,22 @@ Left as an exercise (unless we have time):
 * How would we make a forecast for a new building?
 
 * If we wanted to maximize expected revenue (in this case it will be negative
-since we're just dealing with costs/losses), we can take expectations at each station count for each building, and
-choose the trap number that maximizes expected revenue for that building. This will be called a
-maximum revenue strategy. How can we generate the distribution of portfolio
-revenue (i.e. the sum of revenue across all the buildings) under the maximum
-revenue strategy from the predictions we already have?
+since we're just dealing with costs/losses), we can take expectations at each
+station count for each building, and choose the trap number that maximizes
+expected revenue for that building. This will be called a maximum revenue
+strategy. How can we generate the distribution of portfolio revenue (i.e. the
+sum of revenue across all the buildings) under the maximum revenue strategy from
+the predictions we already have?
 
 
 
 ## Gaussian process instead of AR(1)
 
-We won't cover this in person, but for anyone interested in Gaussian processes (GP)
-this section explains how to implement a GP as an alternative to the AR(1). This is pretty math heavy and just intended to give people interested in GPs an example of how to do it. If you're not interested in GPs feel free to ignore this. 
+We won't cover this in class, but for anyone interested in Gaussian processes
+(GP) this section explains how to implement a GP as an alternative to the AR(1).
+This is pretty math heavy and just intended to give people interested in GPs an
+example of how to do it. If you're not interested in GPs feel free to ignore
+this.
 
 ### Joint density for AR(1) process
 
@@ -1567,7 +1574,8 @@ scalar transformations like we did previously
 (e.g., in the section __Time varying effects and structured priors__)
 we will now do it with linear algebra operations.
 
-The trick is that by specifying each element of $\texttt{mo_raw}$ to be distributed $\text{Normal}(0,1)$ we are implicitly defining
+The trick is that by specifying each element of $\texttt{mo_raw}$ to be
+distributed $\text{Normal}(0,1)$ we are implicitly defining
 $\texttt{mo_raw} \sim \text{MultiNormal}(0, I_M)$, where $I_M$ is the
 $M \times M$ identity matrix. Then we do a linear transformation using a matrix
 $L$ and assign the result to `mo`, i.e., $\texttt{mo} = L\times\texttt{mo_raw}$.
