@@ -46,7 +46,7 @@ Imagine that you are a statistician or data scientist working as an independent
 contractor. One of your clients is a company that owns many residential buildings
 throughout New York City. The property manager explains that they are concerned about the number
 of cockroach complaints that they receive from their buildings. Previously
-the company has offered monthly visits from a pest inspector as a solution to
+the company has offered ad-hoc visits from a pest inspector as a solution to
 this problem. While this is the default solution of many property managers in
 NYC, the tenants are rarely home when the inspector visits, and so the manager
 reasons that this is a relatively expensive solution that is currently not very
@@ -86,13 +86,16 @@ Fortunately, Bayesian data analysis provides a coherent framework for us to tack
 Formally, we are interested in finding
 
 $$
-\arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[-L(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
+\arg\min_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[L(\textrm{complaints}(\textrm{traps})) + \textrm{C}(\textrm{traps})]
 $$
+
 Note that this also equals:
 
 $$
-\arg\min_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[L(\textrm{complaints}(\textrm{traps})) + \textrm{C}(\textrm{traps})]
+\arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[-L(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
 $$
+We'll use this formulation of the problem because it accords with other texts on 
+decision theory (see, for example, _Applied Statistical Decision Theory_ by Raiffa, and Schlaifer).
 
 The property manager would also, if possible, like to learn how these results
 generalize to buildings they haven't treated so they can understand the
