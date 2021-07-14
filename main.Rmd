@@ -651,7 +651,7 @@ comp_multi_NB <- cmdstan_model("stan_programs/multiple_NB_regression.stan")
 ### Fit to data and check the fit
 
 ```{r fit_multi_NB}
-fit_multi_NB <- comp_multi_NB$sample(data = standata_simple, refresh = 0)
+fit_multi_NB <- comp_multi_NB$sample(data = standata_simple)
 ```
 
 
@@ -712,7 +712,7 @@ ppc_stat_grouped(
 We're getting plausible predictions for most building means but some are
 estimated better than others and some have large uncertainties.
 If we explicitly model the variation across buildings we may be able to
-get better estimates.
+get even better estimates.
 
 ## Hierarchical modeling
 
