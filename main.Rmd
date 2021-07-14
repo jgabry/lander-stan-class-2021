@@ -96,6 +96,7 @@ Note that this also equals:
 $$
 \arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[-L(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
 $$
+
 We'll use this formulation of the problem because it accords with other texts on
 decision theory (see, for example, _Applied Statistical Decision Theory_ by
 Raiffa and Schlaifer).
@@ -1420,10 +1421,11 @@ standata_hier_long$M_forward <- 12
 
 fit_forecast <- comp_forecast$sample(
   data = standata_hier_long,
-  refresh = 500,
   chains = 4, 
   parallel_chains = 4,
-  adapt_delta = 0.9
+  adapt_delta = 0.95,
+  refresh = 250,
+  show_messages = FALSE
 )
 ```
 
@@ -1437,11 +1439,12 @@ predicted_complaints <- draws$y_pred
 
 # draws (hidden) x buildings x number of traps
 dim(predicted_complaints)
+dim(draws_of(predicted_complaints))
 ```
 
 ### Factoring in the various costs for the client
 
-#### Cost of exterminator
+#### Losses due to number of complaints
 
 The client has a policy that for every 10 complaints, they'll call an exterminator costing them \$100, so that amounts to \$10 per complaint:
 
@@ -1449,11 +1452,16 @@ The client has a policy that for every 10 complaints, they'll call an exterminat
 # this is a bit of an approximation because complaints don't have to 
 # be a multiple of 10, but this is close enough. we could do a little more
 # work to get it exact if we want
-total_losses <- -10 * predicted_complaints
+losses <- -10 * predicted_complaints
+dimnames(losses) <- list("building" = NULL, "traps" = NULL)
 ```
 
+For the purpose of this example we omit the potential losses due to tenants 
+leaving the building if the number of complaints is high enough or
+new tenants not wanted to rent in the building if the complaints become 
+public (e.g., in online reviews).
 
-#### Cost of materials and labor for maintaining traps
+#### Materials and labor costs for maintaining the traps
 
 Another key input to our analysis will be the cost of installing traps (really
 bait stations). We're simulating the number of complaints we receive over the
@@ -1465,7 +1473,6 @@ maintaining one bait station for a year plus monthly replenishment of the bait
 material is about \$20.
 
 ```{r materials-cost-formulation}
-# materials cost
 N_traps <- 20
 costs <- 20 * (0:N_traps)
 ```
@@ -1480,7 +1487,6 @@ factored in as well. The marginal person-person hours above five traps are at
 the higher pest-control-labor rate.
 
 ```{r labor-cost-formulation}
-# labor costs
 N_months_labor <- standata_hier_long$M_forward / 2
 hourly_rate_low <- 20
 hourly_rate_high <- 30
@@ -1489,17 +1495,18 @@ costs <- costs +
   (0:N_traps >= 5 & 0:N_traps < 10) * (N_months_labor * (hourly_rate_low + 1 * hourly_rate_high)) +
   (0:N_traps >= 10 & 0:N_traps < 15) * (N_months_labor * (hourly_rate_low + 2 * hourly_rate_high)) +
   (0:N_traps >= 15) * (N_months_labor * (hourly_rate_low + 3 * hourly_rate_high))
-```
 
-```{r}
-print(cbind(traps = 0:20, cost = costs))
+ggplot(data.frame(traps = 0:20, cost = costs), 
+       aes(x = traps, y = costs)) + 
+  geom_point() + 
+  geom_line()
 ```
 
 We can now include the materials and labor into the total utility by 
-subtracting `costs` from the `total_losses` we already have:
+subtracting `costs` from the `losses` we already have:
 
 ```{r utility}
-utility <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
+utility <- sweep(losses, MARGIN = 2, STATS = costs, FUN = '-')
 ```
 
 ### Plotting forecasts
@@ -1507,7 +1514,7 @@ utility <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
 We can now plot curves with number of traps on the x-axis and utility
 forecasts and uncertainty intervals on the y-axis.
 
-```{r utility-curves, fig.width = 8, fig.height = 8}
+```{r utility-curves, fig.width = 7, fig.height = 6}
 # calculate means and central intervals (for example 90% intervals)
 mean_utility <- t(apply(utility, c(1, 2), mean))
 lower_utility <- t(apply(utility, c(1, 2), quantile, 0.05))
@@ -1525,38 +1532,47 @@ utility_df <-
     building = rep(buildings, each = max(traps) + 1)
   )
 
-dec_df <- utility_df %>%
+forecast_plot <- ggplot(data = utility_df, aes(x = traps, y = utility)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), fill = "skyblue2") +
+  geom_line() +
+  labs(x = "Number of traps", y = "Utility ($)") +
+  facet_wrap(~ building, scales = "free_x", ncol = 3, labeller = label_both) + 
+  theme(text = element_text(size = 18))
+forecast_plot
+```
+And we overlay the answer to the decision problem  show the maximum expected
+utility and the corresponding number of traps to set.
+
+```{r plot-decision, fig.width = 7, fig.height = 6}
+decision_df <- utility_df %>%
   group_by(building) %>%
   summarise(
     arg_max = which.max(utility) - 1,
     max = max(utility)
   )
-
-ggplot(data = utility_df, aes(x = traps, y = utility)) +
-  geom_ribbon(aes(ymin = lower, ymax = upper), fill = "skyblue") +
-  geom_vline(data = dec_df,
+forecast_plot + 
+  geom_vline(data = decision_df,
              mapping = aes(xintercept = arg_max),
-             col = "red") +
-  geom_hline(data = dec_df,
+             col = "red2", linetype = 2) +
+  geom_hline(data = decision_df,
              mapping = aes(yintercept = max),
-             col = "red") +
-  geom_line() +
-  labs(x = "Number of traps", y = "Utility ($)") +
-  facet_wrap(~ building, scales = "fixed", ncol = 3)
+             col = "red2", linetype = 2) +
+  geom_point(data = decision_df, 
+             mapping = aes(x = arg_max, y = max), 
+             col = "red2", size = 4)
 ```
-
 <br>
 
 Left as an exercise (unless we have time):
 
 * How would we make a forecast for a new building?
 
-* If we wanted to maximize expected utility, we can take expectations at each
-station count for each building, and choose the trap number that maximizes
-expected revenue for that building. This will be called a maximum revenue
-strategy. How can we generate the distribution of portfolio revenue (i.e. the
-sum of revenue across all the buildings) under the maximum revenue strategy from
-the predictions we already have?
+* When maximizing expected utility, we take expectations at each trap count for
+each building, and choose the trap number that maximizes expected utility
+(revenue) for that building. This will be called a maximum revenue strategy. How
+can we generate the distribution of portfolio revenue (i.e. the sum of revenue
+across all the buildings) under the maximum revenue strategy from the
+predictions we already have?
 
 
 
