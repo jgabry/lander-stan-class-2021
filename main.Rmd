@@ -219,8 +219,9 @@ In R we can simulate from the prior predictive distribution using a
 function like this:
 
 ```{r simulate-poisson-data}
+# poisson data generating process (dgp)
 # using normal distributions for priors on alpha and beta
-simple_poisson_dpg <- function(traps, alpha_mean, alpha_sd, beta_mean, beta_sd) {
+simple_poisson_dgp <- function(traps, alpha_mean, alpha_sd, beta_mean, beta_sd) {
   N <- length(traps)
   alpha <- rnorm(1, mean = alpha_mean, sd = alpha_sd);
   beta <- rnorm(1, mean = beta_mean, sd = beta_sd);
@@ -233,7 +234,7 @@ Try with $N(0,10)$ priors on both parameters:
 
 ```{r prior-pred-really-bad}
 # you can run this chunk multiple times to keep generating different datasets
-simple_poisson_dpg(
+simple_poisson_dgp(
   pest_data$traps,
   alpha_mean = 0,
   alpha_sd = 10,
@@ -245,7 +246,7 @@ simple_poisson_dpg(
 Try with $N(0,1)$ priors on both parameters:
 
 ```{r prior-pred-bad}
-simple_poisson_dpg(
+simple_poisson_dgp(
   pest_data$traps,
   alpha_mean = 0,
   alpha_sd = 1,
@@ -259,7 +260,7 @@ to the $N(0,1)$ priors:
 
 ```{r prior-pred-check}
 prior_preds <- t(replicate(1000, expr = {
-  simple_poisson_dpg(
+  simple_poisson_dgp(
     traps = pest_data$traps,
     alpha_mean = 0,
     alpha_sd = 1,
@@ -284,7 +285,7 @@ summary(apply(prior_preds, 1, max))
 A more reasonable prior:
 
 ```{r prior-pred-better}
-simple_poisson_dpg(
+simple_poisson_dgp(
   traps = pest_data$traps,
   alpha_mean = log(7),
   alpha_sd = 0.5,
@@ -297,7 +298,7 @@ Simulate 1000 times and calculate summary stats:
 
 ```{r prior-pred-better-sim}
 prior_preds <- t(replicate(1000, expr = {
-  simple_poisson_dpg(
+  simple_poisson_dgp(
     traps = pest_data$traps,
     alpha_mean = log(7),
     alpha_sd = 0.5,
