@@ -1461,7 +1461,7 @@ leaving the building if the number of complaints is high enough or
 new tenants not wanted to rent in the building if the complaints become 
 public (e.g., in online reviews).
 
-#### Materials and labor costs for maintaining the traps
+#### Cost of materials and labor for maintaining the traps
 
 Another key input to our analysis will be the cost of installing traps (really
 bait stations). We're simulating the number of complaints we receive over the
@@ -1474,7 +1474,7 @@ material is about \$20.
 
 ```{r materials-cost-formulation}
 N_traps <- 20
-costs <- 20 * (0:N_traps)
+costs <- 20 * 0:N_traps
 ```
 
 We'll also need labor for maintaining the bait stations, which need to be
@@ -1525,14 +1525,14 @@ traps <- seq(0, nrow(mean_utility) - 1)
 
 utility_df <-
   data.frame(
-    utility = as.vector(mean_utility),
+    expected_utility = as.vector(mean_utility),
     lower = as.vector(lower_utility),
     upper = as.vector(upper_utility),
     traps = rep(traps, times = max(buildings)),
     building = rep(buildings, each = max(traps) + 1)
   )
 
-forecast_plot <- ggplot(data = utility_df, aes(x = traps, y = utility)) +
+forecast_plot <- ggplot(data = utility_df, aes(x = traps, y = expected_utility)) +
   geom_ribbon(aes(ymin = lower, ymax = upper), fill = "skyblue2") +
   geom_line() +
   labs(x = "Number of traps", y = "Utility ($)") +
@@ -1540,15 +1540,16 @@ forecast_plot <- ggplot(data = utility_df, aes(x = traps, y = utility)) +
   theme(text = element_text(size = 18))
 forecast_plot
 ```
-And we overlay the answer to the decision problem  show the maximum expected
-utility and the corresponding number of traps to set.
+
+Finally, we can overlay the answer to the decision problem and show the maximum
+expected utility and the corresponding number of traps to set.
 
 ```{r plot-decision, fig.width = 7, fig.height = 6}
 decision_df <- utility_df %>%
   group_by(building) %>%
   summarise(
-    arg_max = which.max(utility) - 1,
-    max = max(utility)
+    arg_max = which.max(expected_utility) - 1, # the number of traps to use
+    max = max(expected_utility)
   )
 forecast_plot + 
   geom_vline(data = decision_df,
