@@ -562,6 +562,7 @@ fit_multi_pois$summary(variables = c("alpha", "beta", "beta_super"))
 ```{r fit_multi_pois-ppc_dens_overlay}
 y_rep <- fit_multi_pois$draws("y_rep", format = "matrix")
 ppc_dens_overlay(standata_simple$complaints, y_rep[1:200,])
+ppc_ecdf_overlay(standata_simple$complaints, y_rep[1:200,])
 ```
 
 This again looks like we haven't captured the smaller counts very well, nor
