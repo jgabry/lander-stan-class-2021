@@ -1366,7 +1366,7 @@ distribution for all numbers of traps, and appropriately captures the tails of t
 data generating process.
 
 
-## Using our model: loss forecasts for decision making
+## Using our model: forecasts for decision making
 
 Our model seems to be fitting well, so now we will go ahead and use the model to
 help us make a decision about how many traps to put in our buildings.
@@ -1374,12 +1374,35 @@ This decision will balance the benefit of using more traps (fewer complaints
 and calls to the exterminator) with the cost of setting up and maintaining the
 traps.
 
-We will generate forecast curves for the buildings for a period of 12 months,
-which will let us quantify our uncertainty about the revenue (in
-this case really just cost) projected for any hypothetical number of traps we
-could use in each building. That is, we will ask the question: over the
-next year, how much would it cost each building if they used 0 traps, or
-1 trap, or 2 traps, etc.?
+Remember our problem definition, formalized above with the notation:
+
+$$
+\arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[-L(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})]
+$$
+where $L$ is the loss associated with a number of complaints, which depends on 
+the number of traps set, and $C$ is the cost of installing and maintaining 
+the traps, which also depends on the number of traps set. Let's define a new 
+term,$u(\textrm{traps})$,
+$$
+u(\textrm{traps}) = -L(\textrm{complaints}(\textrm{traps})) - \textrm{C}(\textrm{traps})
+$$
+where $u$ stands for utility.
+
+Then the problem is:
+$$
+\arg\max_{\textrm{traps} \in \mathbb{N}} \mathbb{E}_{\text{complaints}}[u(\textrm{traps})]
+$$
+We've done nothing but change the name of the term over which we're taking the
+expectation. We've done so for clarity of exposition; instead of couching our
+problem in terms of maximizing expected negative losses and costs, we can frame our 
+problem in terms of maximizing the expected benefits.
+
+We will generate forecasts of complaints for the buildings for a period of 12
+months, which will let us quantify our uncertainty about the complaints, and
+ultimately utility, projected for any hypothetical number of traps we could use
+in each building. That is, we will ask the question: over the next year, how
+much would it benefit each building if they used 0 traps, or 1 trap, or 2 traps,
+etc.?
 
 To do this we first need to predict the number of complaints over 12 months
 in each building for each hypothetical number of traps (we'll limit it to a
@@ -1432,13 +1455,14 @@ total_losses <- -10 * predicted_complaints
 
 #### Cost of materials and labor for maintaining traps
 
-Another key input to our analysis will be the cost of installing traps
-(really bait stations). We're simulating the number of complaints we receive over the course of a year, so we
-need to understand the cost associated with maintaining each bait station over
-the course of a year. There's the cost attributed to the raw bait station, which
-is the plastic housing and the bait material, a peanut-buttery substance that's
-injected with insecticide. The cost of maintaining one bait station for a year
-plus monthly replenishment of the bait material is about \$20.
+Another key input to our analysis will be the cost of installing traps (really
+bait stations). We're simulating the number of complaints we receive over the
+course of a year, so we need to understand the cost associated with maintaining
+each bait station over the course of a year. There's the cost attributed to the
+raw bait station, which is the plastic housing and the bait material, a
+peanut-buttery substance that's injected with insecticide. The cost of
+maintaining one bait station for a year plus monthly replenishment of the bait
+material is about \$20.
 
 ```{r materials-cost-formulation}
 # materials cost
@@ -1457,8 +1481,7 @@ the higher pest-control-labor rate.
 
 ```{r labor-cost-formulation}
 # labor costs
-N_months_forward <- 12
-N_months_labor <- N_months_forward / 2
+N_months_labor <- standata_hier_long$M_forward / 2
 hourly_rate_low <- 20
 hourly_rate_high <- 30
 costs <- costs +
@@ -1472,44 +1495,44 @@ costs <- costs +
 print(cbind(traps = 0:20, cost = costs))
 ```
 
-We can now include the materials and labor into the total revenue lost by 
+We can now include the materials and labor into the total utility by 
 subtracting `costs` from the `total_losses` we already have:
 
 ```{r total_losses}
-total_losses <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
+utility <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
 ```
 
 ### Plotting forecasts
 
-We can now plot curves with number of traps on the x-axis and revenue
+We can now plot curves with number of traps on the x-axis and utility
 forecasts and uncertainty intervals on the y-axis.
 
 ```{r revenue-loss-curves, fig.width = 8, fig.height = 8}
 # calculate means and central intervals (for example 90% intervals)
-mean_loss <- t(apply(total_losses, c(1, 2), mean))
-lower_loss <- t(apply(total_losses, c(1, 2), quantile, 0.05))
-upper_loss <- t(apply(total_losses, c(1, 2), quantile, 0.95))
+mean_utility <- t(apply(utility, c(1, 2), mean))
+lower_utility <- t(apply(utility, c(1, 2), quantile, 0.05))
+upper_utility <- t(apply(utility, c(1, 2), quantile, 0.95))
 
-buildings <- seq(1, ncol(mean_loss))
-traps <- seq(0, nrow(mean_loss) - 1)
+buildings <- seq(1, ncol(mean_utility))
+traps <- seq(0, nrow(mean_utility) - 1)
 
-loss_df <-
+utility_df <-
   data.frame(
-    loss = as.vector(mean_loss),
-    lower = as.vector(lower_loss),
-    upper = as.vector(upper_loss),
+    utility = as.vector(mean_utility),
+    lower = as.vector(lower_utility),
+    upper = as.vector(upper_utility),
     traps = rep(traps, times = max(buildings)),
     building = rep(buildings, each = max(traps) + 1)
   )
 
-dec_df <- loss_df %>%
+dec_df <- utility_df %>%
   group_by(building) %>%
   summarise(
-    arg_max = which.max(loss) - 1,
-    max = max(loss)
+    arg_max = which.max(utility) - 1,
+    max = max(utility)
   )
 
-ggplot(data = loss_df, aes(x = traps, y = loss)) +
+ggplot(data = utility_df, aes(x = traps, y = utility)) +
   geom_ribbon(aes(ymin = lower, ymax = upper), fill = "skyblue") +
   geom_vline(data = dec_df,
              mapping = aes(xintercept = arg_max),
@@ -1518,7 +1541,7 @@ ggplot(data = loss_df, aes(x = traps, y = loss)) +
              mapping = aes(yintercept = max),
              col = "red") +
   geom_line() +
-  labs(x = "Number of traps", y = "Revenue") +
+  labs(x = "Number of traps", y = "Utility ($)") +
   facet_wrap(~ building, scales = "fixed", ncol = 3)
 ```
 
