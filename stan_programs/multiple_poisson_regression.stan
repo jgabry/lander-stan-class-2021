@@ -25,5 +25,5 @@ model {
   beta_super ~ normal(-0.5, 1);
 }
 generated quantities {
-  array[N] int y_rep poisson_log_rng(eta);
+  array[N] int y_rep = poisson_log_rng(eta);
 }
