@@ -419,6 +419,9 @@ dim(y_rep) # number of posterior draws x number of data points
 ```{r fit_simple_pois-ppc_dens_overlay}
 # https://mc-stan.org/bayesplot/reference/PPC-distributions#plot-descriptions
 ppc_dens_overlay(y = standata_simple$complaints, yrep = y_rep[1:200,])
+
+# can also compare cumulative distribution functions
+ppc_ecdf_overlay(y = standata_simple$complaints, yrep = y_rep[1:200,])
 ```
 
 In the plot above we have the kernel density estimate of the observed data ($y$,
