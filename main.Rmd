@@ -1498,7 +1498,7 @@ print(cbind(traps = 0:20, cost = costs))
 We can now include the materials and labor into the total utility by 
 subtracting `costs` from the `total_losses` we already have:
 
-```{r total_losses}
+```{r utility}
 utility <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
 ```
 
@@ -1507,7 +1507,7 @@ utility <- sweep(total_losses, MARGIN = 2, STATS = costs, FUN = '-')
 We can now plot curves with number of traps on the x-axis and utility
 forecasts and uncertainty intervals on the y-axis.
 
-```{r revenue-loss-curves, fig.width = 8, fig.height = 8}
+```{r utility-curves, fig.width = 8, fig.height = 8}
 # calculate means and central intervals (for example 90% intervals)
 mean_utility <- t(apply(utility, c(1, 2), mean))
 lower_utility <- t(apply(utility, c(1, 2), quantile, 0.05))
@@ -1551,8 +1551,7 @@ Left as an exercise (unless we have time):
 
 * How would we make a forecast for a new building?
 
-* If we wanted to maximize expected revenue (in this case it will be negative
-since we're just dealing with costs/losses), we can take expectations at each
+* If we wanted to maximize expected utility, we can take expectations at each
 station count for each building, and choose the trap number that maximizes
 expected revenue for that building. This will be called a maximum revenue
 strategy. How can we generate the distribution of portfolio revenue (i.e. the
