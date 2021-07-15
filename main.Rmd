@@ -1201,10 +1201,11 @@ This can be a motivation for using an autoregressive prior for our monthly
 effects. The model is as follows:
 
 $$
-\texttt{mo}_t \sim \text{Normal}(\rho \, \texttt{mo}_{t-1}, \sigma_\texttt{mo}) \\
+\texttt{mo}_t | \texttt{mo}_{t-1} \sim \text{Normal}(\rho \, \texttt{mo}_{t-1}, \sigma_\texttt{mo}) \\
 \equiv \\
-\texttt{mo}_t = \rho \, \texttt{mo}_{t-1} +\epsilon_t , \quad \epsilon_t \sim \text{Normal}(0, \sigma_\texttt{mo}) \\
-\quad \rho \in [-1,1]
+\texttt{mo}_t = \rho \, \texttt{mo}_{t-1} +\epsilon_t, 
+\quad \epsilon_t \sim \text{Normal}(0, \sigma_\texttt{mo}) \\
+\quad \rho \in (-1,1)
 $$
 
 This equation says that the monthly effect in month $t$ is directly related to
@@ -1286,7 +1287,7 @@ we will use for $\texttt{mo}_1$. The full AR(1) specification is then:
 
 $$
 \texttt{mo}_1 \sim \text{Normal}\left(0, \frac{\sigma_\texttt{mo}}{\sqrt{1 - \rho^2}}\right) \\
-\texttt{mo}_t \sim \text{Normal}\left(\rho \, \texttt{mo}_{t-1}, \sigma_\texttt{mo}\right) \forall t > 1
+\texttt{mo}_t | \texttt{mo}_{t-1} \sim \text{Normal}\left(\rho \, \texttt{mo}_{t-1}, \sigma_\texttt{mo}\right) \forall t > 1
 $$
 
 Let's compile and fit the model.
