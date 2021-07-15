@@ -31,15 +31,11 @@ parameters {
 }
 transformed parameters {
   real phi = inv(inv_phi);
+  
+  // non-centered parameterization of building-specific intercepts and slopes
   vector[J] mu = (alpha + building_data * zeta) + sigma_mu * mu_raw;
-  
-  // To add: non-centered parameterization of building-specific slopes (kappa)
-  vector[J] kappa = ??
-  
-  // To add: update eta now to include kappa too
-  // hint: you may need elementwise multiplication operator '.*' instead of vector multiplication
-  //       to multiple kappa by traps
-  vector[N] eta = ?? 
+  vector[J] kappa = (beta + building_data * gamma) + sigma_kappa * kappa_raw;
+  vector[N] eta = mu[building_idx] + kappa[building_idx] .* traps  + log_sq_foot;
 }
 model {
   complaints ~ neg_binomial_2_log(eta, phi);
