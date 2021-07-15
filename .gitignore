@@ -1,4 +1,5 @@
 *.key
+recordings
 stan_programs_answers
 stan_programs/hier_NB_regression
 stan_programs/hier_NB_regression_ncp
