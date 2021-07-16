@@ -1373,6 +1373,28 @@ distribution for all numbers of traps, and appropriately captures the tails of t
 data generating process.
 
 
+We can also plot the `mo` parameters directly and look at the 
+estimated latent AR(1) trend. This isn't a PPC, just looking at the posterior
+distribution of `mo`, but we can trick the PPC plot functions into working
+for this too:
+
+```{r fit_hier_NB_mos-plot-mo}
+# this is a bit of an abuse of the ppc functions:
+# instead of data i'm setting y equal to the posterior means of mo
+# instead of yrep i'm setting  yrep equal to the matrix of mo draws
+ppc_ribbon(
+  y = fit_hier_NB_mos$summary(variables = "mo", "mean")$mean,
+  yrep = fit_hier_NB_mos$draws("mo", format = "matrix"),
+  prob = 0.5,
+  prob_outer = 0.9
+) + 
+  legend_none() + 
+  labs(x = "Month", y = "Latent AR(1)")
+```
+
+
+
+
 ## Using our model: forecasts for decision making
 
 Our model seems to be fitting well, so now we will go ahead and use the model to
