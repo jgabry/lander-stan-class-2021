@@ -5,48 +5,63 @@ data {
   array[N] int<lower=0> complaints;
   vector<lower=0>[N] traps;                
   
+  // 'exposure'
   vector[N] log_sq_foot;  
   
+  // building-level data
   int<lower=1> K;
   int<lower=1> J;
   array[N] int<lower=1,upper=J> building_idx;
   matrix[J,K] building_data;
   
-  // To add:
-  // number of months M
-  // integer array of month indexes, mo_idx
+  // month data
+  int<lower=1> M;
+  array[N] int<lower=1,upper=M> mo_idx;
 }
 parameters {
-  real<lower=0> inv_phi;  
+  real<lower=0> inv_phi;   // 1/phi (easier to think about prior for 1/phi instead of phi)
   
-  vector[J] mu_raw;
-  real<lower=0> sigma_mu; 
-  real alpha;  
-  vector[K] zeta; 
+  vector[J] mu_raw;        // N(0,1) params for non-centered param of building-specific intercepts
+  real<lower=0> sigma_mu;  // sd of buildings-specific intercepts
+  real alpha;              // 'global' intercept
+  vector[K] zeta;          // coefficients on building-level predictors in model for mu
   
-  vector[J] kappa_raw;    
-  real<lower=0> sigma_kappa; 
-  real beta;           
-  vector[K] gamma;
+  vector[J] kappa_raw;       // N(0,1) params for non-centered param of building-specific slopes
+  real<lower=0> sigma_kappa; // sd of buildings-specific slopes
+  real beta;                 // 'global' slope on traps variable
+  vector[K] gamma;           // coefficients on building-level predictors in model for kappa
   
-  // To add:
-  // rho_raw
-  // mo_raw
-  // sigma_mo
+  
+  real<lower=0,upper=1> rho_raw; // used to construct rho, the AR(1) coefficient
+  vector[M] mo_raw;              // N(0,1) params for non-centered param of AR(1)
+  real<lower=0> sigma_mo;        // sd of month-specific parameters (sigma_mo)
 }
 transformed parameters {
   real phi = inv(inv_phi);
   
+  // non-centered parameterization of building-specific intercepts and slopes
   vector[J] mu = alpha + building_data * zeta + sigma_mu * mu_raw;
   vector[J] kappa = beta + building_data * gamma + sigma_kappa * kappa_raw;
   
-  // To add:
   // non-centered parameterization of AR(1) process priors
-  // compute rho from rho_raw
-  // compute mo from mo_raw, sigma_mo, and rho
+  real rho = 2 * rho_raw - 1;      // ensures that rho is between -1 and 1
   
-  // To add: add mo to eta
-  vector[N] eta = mu[building_idx] + kappa[building_idx] .* traps + log_sq_foot;
+  vector[M] mo = sigma_mo * mo_raw;  // all of them share this term
+  mo[1] /= sqrt(1 - rho^2);          // mo[1] = mo[1] / sqrt(1 - rho^2)
+  for (m in 2:M) {
+    mo[m] += rho * mo[m-1];          // mo[m] = mo[m] + rho * mo[m-1];
+  }
+  
+  /* the above is a slightly more efficient version of this: 
+   vector[M] mo;
+   mo[1] = 0 + mo_raw[1] * sigma_mo / sqrt(1-rho^2);
+   for (m in 2:M) {
+     mo[m] = rho * mo[m-1] + mo_raw[m] * sigma_mo;
+   }
+  */
+
+  vector[N] eta = mu[building_idx]  + kappa[building_idx] .* traps 
+                  + mo[mo_idx] + log_sq_foot;
 }
 model {
   complaints ~ neg_binomial_2_log(eta, phi);
@@ -63,7 +78,6 @@ model {
   alpha ~ normal(log(7), 1);
   zeta ~ normal(0, 1);
   
-  // priors on the AR stuff (we've added these in for you already)
   rho_raw ~ beta(10, 5);
   mo_raw ~ normal(0,1);
   sigma_mo ~ normal(0,1);
