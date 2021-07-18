@@ -35,6 +35,7 @@ model {
   sigma_x ~ normal(0, 2);
   sigma_y ~ normal(0, 2);
   x[,1] ~ normal(mu_x, sigma_x);
-  y ~ normal_id_glm(x, mu_y, beta, sigma_y);
+  // y ~ Normal(mu_y + beta * x, sigma_y);
+  y ~ normal_id_glm(x, mu_y, beta, sigma_y); 
 }
 
