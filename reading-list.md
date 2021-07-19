@@ -10,7 +10,6 @@ Hope this list is helpful. If I forgot any topics please let me know!
 * [Stan documentation](http://mc-stan.org/users/documentation/index.html) (links to various kinds of documentation for Stan). Some of the most useful doc pages are:
     - [Stan Modeling Language User’s Guide and Reference Manual](https://mc-stan.org/docs/2_27/stan-users-guide/index.html)
     - [Case Studies](http://mc-stan.org/users/documentation/case-studies)
-    - [Best Practices wiki](https://github.com/stan-dev/stan/wiki/Stan-Best-Practices)
     - [Prior Choice Recommendations wiki](https://github.com/stan-dev/stan/wiki/Prior-Choice-Recommendations)
 * Stan developer Ben Goodrich's lecture videos and materials from his masters-level course at Columbia _Bayesian Statistics for the Social Sciences_ [(YouTube videos,](https://www.youtube.com/playlist?list=PLSZp9QshJ8wyPCgoQR0Kw3HDNuy1FEZH9) [course materials)](https://courseworks2.columbia.edu/courses/54170/files)
 * Contributed talks and materials from past Stan conferences, including videos, slides, and code ([stancon_talks repository](https://github.com/stan-dev/stancon_talks/blob/master/README.md))
@@ -18,6 +17,8 @@ Hope this list is helpful. If I forgot any topics please let me know!
 * Examples about how to add user-defined functions to a Stan program [Adding functions to Stan](https://mc-stan.org/docs/2_27/stan-users-guide/functions-programming-chapter.html)
 * Examples about how to add a user-defined probability distributions [Adding custom distributions to Stan](https://mc-stan.org/docs/2_27/stan-users-guide/custom-probability-functions-chapter.html)
 * Info about how to do within-chain parallelization in Stan Manual [link to Stan manual chapter](https://mc-stan.org/docs/2_27/stan-users-guide/parallelization-chapter.html)
+* Case study demonstrating `reduce_sum` for within-chain parallelization [link](https://mc-stan.org/users/documentation/case-studies/reduce_sum_tutorial.html)
+* Running Stan on the GPU [cmdstanr vignette](https://mc-stan.org/cmdstanr/articles/opencl.html)
 
 ### R packages from the Stan development team
 
@@ -94,6 +95,7 @@ This is only a problem if your model lacks important structure. The generative m
 
 * _Informative_ priors on the relevant regression coefficients will help a lot
 * The [QR reparameterization](http://mc-stan.org/users/documentation/case-studies/qr_regression.html)) helps avoid computational issues when you have highly correlated predictors. 
+
 
 ### Visualization and graphical model checking
 
@@ -216,9 +218,6 @@ Some blog posts on the topic from various authors:
 
 * Gelman paper with section 3 on poor properties of Bayesian inference vs. MLE under flat priors: [paper link](http://www.stat.columbia.edu/~gelman/research/published/deep.pdf)
 
-### Prior sensitivity
-
-
 
 ### Posterior predictive p-values
 * Gelman paper on understanding how posterior predictive checks relate to overfitting and data double-dipping [paper link](http://www.stat.columbia.edu/~gelman/research/published/ppc_understand3.pdf) 
@@ -229,8 +228,4 @@ Several Stan developers wrote a paper about the custom implementation of autodif
 
 * The Stan Math Library: Reverse-Mode Automatic Differentiation in C++. [arXiv 1509.07164](https://arxiv.org/abs/1509.07164)
 
-### Current limitations of Stan
 
-Here's a wiki page where we list a lot of things we want to add to Stan going forward. Many of these things are already in progress, but this should help give a sense of some of the current limitations: 
-
-* [Stan Roadmap](https://github.com/stan-dev/stan/wiki/Stan-Road-Map#math-library-roadmap)
